@@ -1,0 +1,421 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Drift — moodboard motion</title>
+<style>
+  :root{
+    --ink:#111; --muted:#8a8a8a; --line:#e6e6e6; --line-strong:#d4d4d4;
+    --bg:#fff; --accent:#00d000;
+    --mono:"SF Mono",ui-monospace,"Cascadia Code","JetBrains Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%}
+  body{background:var(--bg);color:var(--ink);font-family:var(--mono);
+    -webkit-font-smoothing:antialiased;display:flex;flex-direction:column;min-height:100vh}
+  header{display:flex;align-items:baseline;gap:14px;padding:18px 26px 14px;border-bottom:1px solid var(--line)}
+  .wordmark{font-size:13px;letter-spacing:.42em;text-transform:uppercase;font-weight:600}
+  .tag{font-size:10px;letter-spacing:.22em;text-transform:uppercase;color:var(--muted)}
+  .spacer{flex:1}
+  .ratio{font-size:10px;letter-spacing:.18em;color:var(--muted);text-transform:uppercase}
+  main{flex:1;display:flex;min-height:0}
+  .stagewrap{flex:1;min-width:0;display:flex;flex-direction:column;padding:30px 30px 22px;gap:16px}
+  .stage{position:relative;flex:1;min-height:0;display:flex;align-items:center;justify-content:center}
+  .frame{position:relative;width:100%;max-width:100%;aspect-ratio:16/9;background:#fff;
+    box-shadow:0 1px 0 var(--line-strong);outline:1px solid var(--line);overflow:hidden}
+  .frame canvas{position:absolute;inset:0;width:100%!important;height:100%!important;display:block}
+  .empty{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    gap:14px;border:1px dashed var(--line-strong);color:var(--muted);text-align:center;cursor:pointer;transition:.18s;z-index:2}
+  .empty.drag{border-color:var(--ink);color:var(--ink);background:#fafafa}
+  .empty .big{font-size:12px;letter-spacing:.16em;text-transform:uppercase}
+  .empty .small{font-size:10px;letter-spacing:.1em;color:var(--muted)}
+  .plus{font-size:30px;line-height:1;font-weight:300}
+  .progress{height:1px;background:var(--line);position:relative;overflow:hidden}
+  .progress .bar{position:absolute;left:0;top:0;bottom:0;width:0;background:var(--ink)}
+  .tray{display:flex;gap:8px;flex-wrap:wrap;align-items:center;min-height:46px}
+  .thumb{position:relative;width:62px;height:40px;border:1px solid var(--line);
+    background:#f4f4f4 center/cover no-repeat;overflow:hidden;flex:none}
+  .thumb video,.thumb img{width:100%;height:100%;object-fit:cover;display:block}
+  .thumb .kind{position:absolute;left:3px;bottom:2px;font-size:8px;letter-spacing:.08em;color:#fff;
+    background:rgba(0,0,0,.55);padding:1px 3px;text-transform:uppercase}
+  .thumb .x{position:absolute;right:2px;top:2px;width:14px;height:14px;border:none;background:rgba(255,255,255,.9);
+    color:#111;font-size:11px;line-height:14px;cursor:pointer;border-radius:50%;padding:0;text-align:center}
+  .addbtn{width:46px;height:40px;border:1px dashed var(--line-strong);background:none;color:var(--muted);
+    font-size:20px;font-weight:300;cursor:pointer;flex:none}
+  .addbtn:hover{border-color:var(--ink);color:var(--ink)}
+  aside{width:264px;flex:none;border-left:1px solid var(--line);padding:30px 26px;display:flex;
+    flex-direction:column;gap:24px;overflow:auto}
+  .ctl .label{display:flex;justify-content:space-between;align-items:baseline;font-size:10px;letter-spacing:.18em;
+    text-transform:uppercase;color:var(--muted);margin-bottom:8px}
+  .ctl .val{color:var(--ink);font-variant-numeric:tabular-nums}
+  input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:1px;background:var(--line-strong);
+    margin:12px 0 0;cursor:pointer}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:11px;height:11px;border-radius:50%;
+    background:var(--ink);border:none;cursor:pointer}
+  input[type=range]::-moz-range-thumb{width:11px;height:11px;border-radius:50%;background:var(--ink);border:none;cursor:pointer}
+  .actions{margin-top:auto;display:flex;flex-direction:column;gap:10px}
+  button.line{width:100%;padding:12px;border:1px solid var(--ink);background:none;color:var(--ink);
+    font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;cursor:pointer;transition:.15s}
+  button.line:hover{background:var(--ink);color:#fff}
+  button.solid{width:100%;padding:13px;border:1px solid var(--ink);background:var(--ink);color:#fff;
+    font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;gap:8px;transition:.15s}
+  button.solid:hover{opacity:.85}
+  button.solid:disabled{opacity:.4;cursor:default}
+  button.solid.rec{background:#fff;color:var(--ink)}
+  .dotrec{width:8px;height:8px;border-radius:50%;background:var(--accent);animation:pulse 1s infinite}
+  @keyframes pulse{50%{opacity:.25}}
+  .hint{font-size:9px;letter-spacing:.04em;color:var(--muted);line-height:1.5}
+  a.dl{display:none}
+  input[type=file]{display:none}
+</style>
+
+<header>
+  <span class="wordmark">Drift</span>
+  <span class="tag">moodboard motion · webgl</span>
+  <span class="spacer"></span>
+  <span class="ratio">16 : 9 — 1920×1080</span>
+</header>
+
+<main>
+  <section class="stagewrap">
+    <div class="stage">
+      <div class="frame" id="frame">
+        <div class="empty" id="empty">
+          <div class="plus">+</div>
+          <div class="big">Drop images or mp4s</div>
+          <div class="small">or click to browse · the camera pans across three held compositions</div>
+        </div>
+      </div>
+    </div>
+    <div class="progress"><div class="bar" id="bar"></div></div>
+    <div class="tray" id="tray"><button class="addbtn" id="addBtn" title="Add media">+</button></div>
+  </section>
+
+  <aside>
+    <div class="ctl">
+      <div class="label"><span>Speed</span><span class="val" id="spdVal">15.0s loop</span></div>
+      <input type="range" id="speed" min="6" max="30" step="0.5" value="15">
+    </div>
+    <div class="ctl">
+      <div class="label"><span>Bulge</span><span class="val" id="blVal">28%</span></div>
+      <input type="range" id="bulge" min="0" max="80" step="1" value="28">
+    </div>
+    <div class="ctl">
+      <div class="label"><span>Parallax</span><span class="val" id="plVal">60%</span></div>
+      <input type="range" id="parallax" min="0" max="150" step="1" value="60">
+    </div>
+    <div class="ctl">
+      <div class="label"><span>Drift</span><span class="val" id="drVal">45%</span></div>
+      <input type="range" id="drift" min="0" max="150" step="1" value="45">
+    </div>
+    <div class="ctl">
+      <div class="label"><span>Disperse</span><span class="val" id="dsVal">55%</span></div>
+      <input type="range" id="disperse" min="0" max="150" step="1" value="55">
+    </div>
+    <div class="ctl">
+      <div class="label"><span>Scale</span><span class="val" id="scVal">100%</span></div>
+      <input type="range" id="scale" min="60" max="200" step="1" value="100">
+    </div>
+    <div class="ctl">
+      <div class="label"><span>Pulse</span><span class="val" id="puVal">30%</span></div>
+      <input type="range" id="pulse" min="0" max="80" step="1" value="30">
+    </div>
+    <div class="actions">
+      <button class="line" id="shuffle">Shuffle layout</button>
+      <button class="solid" id="export" disabled>Export mp4</button>
+      <div class="hint" id="hint">Add media to begin.</div>
+    </div>
+  </aside>
+</main>
+
+<input type="file" id="file" accept="image/*,video/*" multiple>
+<a class="dl" id="dl"></a>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+<script>
+"use strict";
+/* DRIFT — WebGL (Three.js) + GSAP.
+   ONE big canvas holds every tile at a fixed position; a single CAMERA pans across it and pauses on
+   3 framings (the holds), traced precisely from the source. Tiles never move — only the camera — so
+   panned-away tiles stay visible at the frame edges. Depth parallax (NEAR pans more than FAR) and a
+   centre-scale bulge (tiles swell, edges straight, as they cross frame-centre) add dimensionality.
+   Eased on a source-matched curve; camera returns to home → seamless loop. 16:9, mp4 export. */
+
+const OUT_W=1920, OUT_H=1080;
+const frame=document.getElementById('frame'), empty=document.getElementById('empty');
+const tray=document.getElementById('tray'), addBtn=document.getElementById('addBtn');
+const fileInput=document.getElementById('file'), bar=document.getElementById('bar');
+const hint=document.getElementById('hint'), exportBtn=document.getElementById('export'), shuffleBtn=document.getElementById('shuffle');
+
+const params={ loopSec:15, bulge:0.28, parallax:0.60, drift:0.45, disperse:0.55, scale:1.0, pulse:0.30 };
+
+// ---- three held compositions, re-measured from the source frames (t≈0.5 / 4.6 / 11.2s) ----
+const SCENES=[
+  // A "home": green hero / starfield-woman / bearded man / eclipse / blue-abstract / dome
+  [ {hx:0.498,hy:0.497,long:473,r:0.80,d:'NEAR'},{hx:0.326,hy:0.691,long:287,r:0.80,d:'NEAR'},
+    {hx:0.708,hy:0.609,long:277,r:0.80,d:'NEAR'},{hx:0.229,hy:0.164,long:175,r:0.80,d:'MID'},
+    {hx:0.530,hy:0.058,long:178,r:1.50,d:'MID'},{hx:0.588,hy:0.942,long:171,r:1.50,d:'FAR'},
+    {hx:0.889,hy:0.343,long:111,r:0.80,d:'FAR'},{hx:0.747,hy:0.962,long:110,r:1.50,d:'FAR'} ],
+  // B "rocket/space": Saturn-V / dome / starfield / typewriter-hands / lime / earth-horizon
+  [ {hx:0.481,hy:0.446,long:600,r:0.80,d:'NEAR'},{hx:0.699,hy:0.486,long:292,r:0.80,d:'NEAR'},
+    {hx:0.280,hy:0.336,long:258,r:0.80,d:'NEAR'},{hx:0.302,hy:0.739,long:257,r:0.80,d:'MID'},
+    {hx:0.612,hy:0.119,long:250,r:0.80,d:'MID'},{hx:0.758,hy:0.868,long:174,r:0.80,d:'FAR'},
+    {hx:0.400,hy:0.024,long:147,r:1.78,d:'FAR'} ],
+  // C "glass/eye/eclipse": green algae-glass / eye / eclipse / blue-abstract / screens / woman-2
+  [ {hx:0.508,hy:0.485,long:464,r:0.80,d:'NEAR'},{hx:0.723,hy:0.418,long:449,r:0.80,d:'NEAR'},
+    {hx:0.268,hy:0.515,long:264,r:0.80,d:'NEAR'},{hx:0.628,hy:0.849,long:261,r:0.80,d:'MID'},
+    {hx:0.315,hy:0.219,long:252,r:0.80,d:'MID'},{hx:0.511,hy:0.105,long:218,r:1.00,d:'FAR'},
+    {hx:0.148,hy:0.138,long:104,r:0.80,d:'FAR'},{hx:0.237,hy:0.971,long:100,r:1.78,d:'FAR'} ],
+];
+const DEPTHZ={NEAR:300, MID:160, FAR:60};
+
+// ---- camera path, TRACED from the source (OpenCV ORB + accumulated similarity over all 360 frames) ----
+// The source is ONE big canvas; a camera pans across it and pauses at 3 framings (the holds). Each hold
+// is {lookAt:[canvasX,canvasY], zoom}. Tiles are placed on the canvas relative to their hold (see
+// rebuildScene); the camera tweens between these → panned-away tiles stay visible at the frame edges.
+const HOLDS=[
+  {lookAt:[ 961,  541], zoom:1.000},   // A "home"  (frames 0–33)
+  {lookAt:[1608, 1284], zoom:0.881},   // B "rocket/space" — camera pans DOWN-RIGHT  (frames 111–148)
+  {lookAt:[1750, -395], zoom:0.921},   // C "glass/eye/eclipse" — camera pans UP  (frames 234–274)
+];
+// loop-phase keyframes (fractions of L) — the source's uneven hold/transition timing. Holds are the
+// flat spans; transitions are eased between them. Last entry == hold A → seamless loop (C→A retargeted
+// to exact home). Each entry: [phase, holdIndex].
+const PHASE=[
+  [0.000,0],[0.092,0],   // hold A
+  [0.308,1],[0.411,1],   // pan A→B, hold B
+  [0.650,2],[0.761,2],   // pan B→C, hold C
+  [1.000,0],             // pan C→home (seam)
+];
+// depth parallax: NEAR tiles pan more than FAR (zero at a tile's own hold so holds stay crisp).
+const DEPTH_PAR={NEAR:0.12, MID:0.0, FAR:-0.08};
+const BULGE_R=720;   // falloff radius (px) for the centre bulge — tiles within this of frame-centre swell
+const DISP_REF=Math.hypot(OUT_W,OUT_H)/2, DISP_START=0.72;   // dispersion: tiles past this radius (near
+                                                             // the frame edge) push radially outward → spread apart as they exit
+
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+
+// source-matched ease: integral of a skewed velocity bell v(p)=p^3*(1-p)^2 (peak ~0.6)
+// -> gentle build, sharp peak, quick settle; zero velocity at both ends (lands cleanly).
+const _N=160, _cum=[0]; (function(){let a=0;for(let i=1;i<=_N;i++){const p=i/_N;a+=Math.pow(p,3)*Math.pow(1-p,2);_cum.push(a);}})();
+const _tot=_cum[_N];
+function srcEase(p){ if(p<=0)return 0; if(p>=1)return 1; const x=p*_N,i=Math.floor(x),f=x-i;
+  return (_cum[i]+(_cum[Math.min(i+1,_N)]-_cum[i])*f)/_tot; }
+
+// springy camera ease WITHOUT recoil: smootherstep (slow → fast → slow, no anticipation dip) plus a
+// terminal overshoot bump that peaks ~t=0.8 a few % past the target and settles. Zero velocity at BOTH
+// ends (the bump and smootherstep both flatten at 0 and 1) → holds and the loop seam stay clean.
+const _OS=0.60;   // overshoot strength (≈9% past target, peak ~t=0.78)
+function springEase(t){ if(t<=0)return 0; if(t>=1)return 1;
+  const s=Math.sin(Math.PI*t); return t*t*t*(t*(t*6-15)+10) + _OS*t*t*s*s; }
+
+// ---------------- three.js setup ----------------
+let renderer,scene,camera,unitPlane,tiles=[],tl=null,seed=(Math.random()*1e9)|0,recording=false,loopProg=0;
+const cam={cx:HOLDS[0].lookAt[0], cy:HOLDS[0].lookAt[1], zoom:HOLDS[0].zoom};   // animated camera
+function initGL(){
+  renderer=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});
+  renderer.setPixelRatio(1); renderer.setSize(OUT_W,OUT_H,false); renderer.setClearColor(0xffffff,1);
+  frame.appendChild(renderer.domElement);
+  scene=new THREE.Scene();
+  camera=new THREE.OrthographicCamera(0,OUT_W,OUT_H,0,1,4000);  // y-up: top=OUT_H, bottom=0
+  camera.position.z=1000;
+  unitPlane=new THREE.PlaneGeometry(1,1);
+  animate();
+}
+
+// ---------------- media ----------------
+function addFiles(files){
+  [...files].forEach(f=>{
+    const isVid=f.type.startsWith('video')||/\.(mp4|mov|webm|m4v)$/i.test(f.name);
+    const isImg=f.type.startsWith('image')||/\.(png|jpe?g|gif|webp|bmp|avif)$/i.test(f.name);
+    if(!isVid&&!isImg) return;
+    const url=URL.createObjectURL(f), id=Math.random().toString(36).slice(2);
+    if(isVid){
+      const v=document.createElement('video');
+      v.src=url; v.muted=true; v.loop=true; v.playsInline=true; v.autoplay=true; v.preload='auto';
+      const item={id,type:'vid',el:v,url};
+      media.push(item); addThumb(item); afterAdd();
+      const go=()=>v.play().catch(()=>{});
+      v.addEventListener('loadeddata',go,{once:true}); v.addEventListener('canplay',go,{once:true}); setTimeout(go,400);
+    }else{
+      const img=new Image();
+      const item={id,type:'img',el:img,url};
+      img.onload=()=>{ media.push(item); addThumb(item); afterAdd(); };
+      img.src=url;
+    }
+  });
+}
+let media=[];
+function afterAdd(){ rebuildScene(); empty.style.display='none'; exportBtn.disabled=false; hint.textContent='Tune the motion, then export.'; }
+function removeMedia(id){
+  media=media.filter(m=>m.id!==id);
+  document.getElementById('th_'+id)?.remove();
+  if(media.length===0){ empty.style.display='flex'; exportBtn.disabled=true; hint.textContent='Add media to begin.'; }
+  rebuildScene();
+}
+function addThumb(item){
+  const d=document.createElement('div'); d.className='thumb'; d.id='th_'+item.id;
+  if(item.type==='vid'){ const v=document.createElement('video'); v.src=item.url; v.muted=true; v.loop=true; v.autoplay=true; v.playsInline=true; v.play().catch(()=>{}); d.appendChild(v); }
+  else { const i=document.createElement('img'); i.src=item.url; d.appendChild(i); }
+  const k=document.createElement('span'); k.className='kind'; k.textContent=item.type==='vid'?'mp4':'img'; d.appendChild(k);
+  const x=document.createElement('button'); x.className='x'; x.textContent='×'; x.onclick=()=>removeMedia(item.id); d.appendChild(x);
+  tray.insertBefore(d,addBtn);
+}
+
+// ---------------- cover-crop a texture to a tile ratio ----------------
+function applyCover(tex,natW,natH,tileAR){
+  if(!natW||!natH) return false;
+  tex.wrapS=tex.wrapT=THREE.ClampToEdgeWrapping;
+  const sr=natW/natH;
+  if(sr>tileAR){ const rx=tileAR/sr; tex.repeat.set(rx,1); tex.offset.set((1-rx)/2,0); }
+  else { const ry=sr/tileAR; tex.repeat.set(1,ry); tex.offset.set(0,(1-ry)/2); }
+  tex.needsUpdate=true; return true;
+}
+
+// ---------------- build scene (unique media -> prioritized slots) ----------------
+function rebuildScene(){
+  tiles.forEach(t=>{ scene.remove(t.mesh); if(t.mesh.material.map) t.mesh.material.map.dispose(); t.mesh.material.dispose(); });
+  tiles=[];
+  const n=media.length; if(!n){ buildTimeline(); return; }
+  const rnd=mulberry32(seed);
+  // prioritized slots: largest of each station first, interleaved -> sparse uploads still centre nicely
+  const perS=[[],[],[]];
+  SCENES.forEach((sc,si)=>sc.forEach(s=>perS[si].push(Object.assign({station:si},s))));
+  perS.forEach(a=>a.sort((x,y)=>y.long-x.long));
+  const priority=[]; for(let i=0,more=true;more;i++){ more=false; for(let s=0;s<3;s++){ if(i<perS[s].length){priority.push(perS[s][i]);more=true;} } }
+  // shuffle media order
+  const mi=media.map((_,i)=>i); for(let i=mi.length-1;i>0;i--){const j=(rnd()*(i+1))|0;[mi[i],mi[j]]=[mi[j],mi[i]];}
+  const count=Math.min(n,priority.length);
+  for(let k=0;k<count;k++){
+    const s=priority[k], m=media[mi[k]], hold=HOLDS[s.station], zk=hold.zoom;
+    // measured on-screen size + centre at this tile's hold (image coords, y-down)
+    let w,h; if(s.r>=1){w=s.long;h=s.long/s.r;} else {h=s.long;w=s.long*s.r;}
+    const sxm=s.hx*OUT_W, sym=s.hy*OUT_H;
+    // → fixed position/size on the big canvas (zoom-1 reference): renders at the measured size/spot
+    //   when the camera sits on this hold (zoom=zk).
+    const cw=w/zk, ch=h/zk;
+    const ccx=hold.lookAt[0]+(sxm-OUT_W/2)/zk, ccy=hold.lookAt[1]+(sym-OUT_H/2)/zk;
+    const tileAR=w/h, z=DEPTHZ[s.d];
+    let tex; if(m.type==='vid'){ tex=new THREE.VideoTexture(m.el); tex.minFilter=THREE.LinearFilter; }
+    else { tex=new THREE.Texture(m.el); tex.minFilter=THREE.LinearFilter; tex.needsUpdate=true; }
+    const natW=m.type==='vid'?m.el.videoWidth:m.el.naturalWidth, natH=m.type==='vid'?m.el.videoHeight:m.el.naturalHeight;
+    const cropped=applyCover(tex,natW,natH,tileAR);
+    const mat=new THREE.MeshBasicMaterial({map:tex,transparent:true,opacity:1,depthTest:false,depthWrite:false});
+    const mesh=new THREE.Mesh(unitPlane,mat); mesh.renderOrder=z; scene.add(mesh);
+    tiles.push({
+      mesh, station:s.station, type:m.type, el:m.el, tileAR, cropped, z,
+      canvas:{cx:ccx, cy:ccy, w:cw, h:ch},   // fixed position+size on the big canvas
+      homeLookAt:hold.lookAt, par:DEPTH_PAR[s.d],
+      amp:0.5+rnd()*0.5, cyc:(rnd()<0.45?1:(rnd()<0.8?2:3)), ph:rnd()*6.28318,
+      // per-tile micro-drift (own ellipse, integer cycles/loop → seamless) — keeps holds alive
+      dax:18+rnd()*22, day:18+rnd()*22, dcx:(rnd()<0.6?1:2), dcy:(rnd()<0.6?1:2),
+      dpx:rnd()*6.28318, dpy:rnd()*6.28318
+    });
+  }
+  buildTimeline();
+}
+
+// ---------------- GSAP timeline: a single camera panning across the big canvas ----------------
+// `cam` is the only thing animated — it pauses on each hold (PHASE flat spans) and springs between them
+// (springEase). Tiles are fixed on the canvas; the render loop reads `cam` and projects them. The last
+// keyframe returns to hold A, so cam at t=L === cam at t=0 → seamless loop.
+function buildTimeline(){
+  if(tl){ tl.kill(); tl=null; }
+  if(!tiles.length) return;
+  const L=params.loopSec, A=HOLDS[0];
+  cam.cx=A.lookAt[0]; cam.cy=A.lookAt[1]; cam.zoom=A.zoom;   // start framed on home
+  tl=gsap.timeline({repeat:-1});
+  for(let i=1;i<PHASE.length;i++){
+    const [ph,hi]=PHASE[i], prevPh=PHASE[i-1][0], prevHi=PHASE[i-1][1];
+    if(hi===prevHi) continue;                                // hold span: camera stays put (no tween)
+    const H=HOLDS[hi];
+    tl.to(cam,{cx:H.lookAt[0], cy:H.lookAt[1], zoom:H.zoom, duration:(ph-prevPh)*L, ease:springEase}, prevPh*L);
+  }
+  tl.to({_p:0},{_p:1,duration:0.001}, L-0.001);  // pin total duration to exactly L
+}
+
+// ---------------- render ----------------
+function animate(){
+  requestAnimationFrame(animate);
+  if(tl){ const L=tl.duration()||1; loopProg=tl.time()/L; if(!recording) bar.style.width=(loopProg*100)+'%'; }
+  const cx=cam.cx, cy=cam.cy, z=cam.zoom, par=params.parallax, b=params.bulge, dr=params.drift;
+  const HW=OUT_W/2, HH=OUT_H/2, TWO_PI=6.28318, lp=loopProg;
+  for(const t of tiles){
+    if(t.type==='vid' && !t.cropped && t.el.videoWidth){ t.cropped=applyCover(t.mesh.material.map,t.el.videoWidth,t.el.videoHeight,t.tileAR); }
+    // per-tile micro-drift (canvas space) — a small ellipse, always on, so holds never feel frozen
+    const drx=dr*t.dax*Math.sin(lp*TWO_PI*t.dcx+t.dpx), dry=dr*t.day*Math.cos(lp*TWO_PI*t.dcy+t.dpy);
+    // project canvas → screen (image coords). Depth parallax: offset grows as the camera leaves this
+    // tile's own hold (so each composition is parallax-free, i.e. crisp, at its own hold).
+    const pdx=(t.homeLookAt[0]-cx)*t.par*par, pdy=(t.homeLookAt[1]-cy)*t.par*par;
+    let sx=(t.canvas.cx+drx-cx+pdx)*z+HW, sy=(t.canvas.cy+dry-cy+pdy)*z+HH;
+    // dispersion — push tiles radially outward once they pass DISP_START toward the edge, so they
+    // spread apart (not move in lockstep) as they exit the frame. Zero inside → held comps stay tight.
+    const rx=sx-HW, ry=sy-HH, rad=Math.hypot(rx,ry)/DISP_REF;
+    const disp=params.disperse*Math.max(0, rad-DISP_START);
+    sx+=rx*disp; sy+=ry*disp;
+    // centre bulge — tiles SWELL (uniform scale, straight edges) as they near frame-centre; falls to 1
+    // past BULGE_R. Direct (not anchored) so the fisheye is actually visible as tiles cross the middle.
+    const dCur=Math.hypot(sx-HW,sy-HH)/BULGE_R;
+    const bulge=1+b*Math.max(0,1-dCur*dCur);
+    const pulse=1+params.pulse*t.amp*Math.sin(lp*TWO_PI*t.cyc+t.ph);
+    const sc=z*params.scale*pulse*bulge;
+    t.mesh.scale.set(Math.max(1e-4,t.canvas.w*sc), Math.max(1e-4,t.canvas.h*sc), 1);
+    t.mesh.position.set(sx, OUT_H-sy, 0);     // image-y (down) → world y-up
+  }
+  if(renderer) renderer.render(scene,camera);
+}
+
+// ---------------- controls ----------------
+const speed=document.getElementById('speed'), spdVal=document.getElementById('spdVal');
+const bulge=document.getElementById('bulge'), blVal=document.getElementById('blVal');
+const parallax=document.getElementById('parallax'), plVal=document.getElementById('plVal');
+const drift=document.getElementById('drift'), drVal=document.getElementById('drVal');
+const disperse=document.getElementById('disperse'), dsVal=document.getElementById('dsVal');
+const scale=document.getElementById('scale'), scVal=document.getElementById('scVal');
+const pulse=document.getElementById('pulse'), puVal=document.getElementById('puVal');
+speed.oninput=()=>{params.loopSec=+speed.value;spdVal.textContent=(+speed.value).toFixed(1)+'s loop';buildTimeline();};
+bulge.oninput=()=>{params.bulge=+bulge.value/100;blVal.textContent=bulge.value+'%';};
+parallax.oninput=()=>{params.parallax=+parallax.value/100;plVal.textContent=parallax.value+'%';};
+drift.oninput=()=>{params.drift=+drift.value/100;drVal.textContent=drift.value+'%';};
+disperse.oninput=()=>{params.disperse=+disperse.value/100;dsVal.textContent=disperse.value+'%';};
+scale.oninput=()=>{params.scale=+scale.value/100;scVal.textContent=scale.value+'%';};
+pulse.oninput=()=>{params.pulse=+pulse.value/100;puVal.textContent=pulse.value+'%';};
+shuffleBtn.onclick=()=>{ seed=(Math.random()*1e9)|0; rebuildScene(); };
+
+// ---------------- files ----------------
+addBtn.onclick=()=>fileInput.click();
+empty.onclick=()=>fileInput.click();
+fileInput.onchange=e=>{addFiles(e.target.files);fileInput.value='';};
+['dragenter','dragover'].forEach(ev=>frame.addEventListener(ev,e=>{e.preventDefault();empty.classList.add('drag');}));
+['dragleave','drop'].forEach(ev=>frame.addEventListener(ev,e=>{e.preventDefault();empty.classList.remove('drag');}));
+frame.addEventListener('drop',e=>{e.preventDefault();if(e.dataTransfer.files.length)addFiles(e.dataTransfer.files);});
+
+// ---------------- export ----------------
+function pickMime(){const types=['video/mp4;codecs=avc1.640028','video/mp4;codecs=avc1','video/mp4','video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm'];
+  for(const t of types) if(window.MediaRecorder&&MediaRecorder.isTypeSupported(t)) return t; return '';}
+exportBtn.onclick=()=>{
+  if(recording||!tiles.length||!tl) return;
+  const mime=pickMime(); if(!mime){hint.textContent='Recording unsupported in this browser.';return;}
+  const isMp4=mime.startsWith('video/mp4');
+  recording=true; exportBtn.disabled=true; shuffleBtn.disabled=true;
+  exportBtn.classList.add('rec'); exportBtn.innerHTML='<span class="dotrec"></span> Recording…';
+  tl.pause(0); tl.play();
+  const stream=renderer.domElement.captureStream(30), chunks=[];
+  const rec=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:14000000});
+  rec.ondataavailable=e=>{if(e.data.size)chunks.push(e.data);};
+  rec.onstop=()=>{
+    const blob=new Blob(chunks,{type:mime}), url=URL.createObjectURL(blob), a=document.getElementById('dl');
+    a.href=url; a.download='drift-loop.'+(isMp4?'mp4':'webm'); a.click();
+    recording=false; exportBtn.disabled=false; shuffleBtn.disabled=false;
+    exportBtn.classList.remove('rec'); exportBtn.innerHTML='Export mp4';
+    hint.textContent=isMp4?'Saved drift-loop.mp4':'mp4 unavailable here — saved .webm.';
+  };
+  const durMs=params.loopSec*1000; rec.start(); const t0=performance.now();
+  (function prog(){const e=performance.now()-t0; bar.style.width=Math.min(100,e/durMs*100)+'%'; if(e<durMs&&recording) requestAnimationFrame(prog);})();
+  setTimeout(()=>{ if(rec.state!=='inactive') rec.stop(); }, durMs+120);
+};
+
+// ---------------- boot ----------------
+if(window.THREE && window.gsap){ initGL(); }
+else { hint.textContent='Could not load WebGL/animation libraries.'; }
+</script>
