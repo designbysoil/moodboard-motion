@@ -193,7 +193,7 @@ const PHASE=[
 ];
 // depth parallax: NEAR tiles pan more than FAR (zero at a tile's own hold so holds stay crisp).
 const DEPTH_PAR={NEAR:0.12, MID:0.0, FAR:-0.08};
-const BULGE_R=0.38;  // lens-bulge falloff radius (Gaussian sigma, aspect-corrected uv) — central dome size
+const BULGE_R=600;   // ripple radius (px): Gaussian falloff of the per-tile centre-scale swell from frame-centre
 const DISP_REF=Math.hypot(OUT_W,OUT_H)/2, DISP_START=0.72;   // dispersion: tiles past this radius (near
                                                              // the frame edge) push radially outward → spread apart as they exit
 
@@ -215,23 +215,7 @@ function springEase(t){ if(t<=0)return 0; if(t>=1)return 1;
 
 // ---------------- three.js setup ----------------
 let renderer,scene,camera,unitPlane,tiles=[],tl=null,seed=(Math.random()*1e9)|0,recording=false,loopProg=0;
-let rt,postScene,postCamera,lensMat;     // post-process lens-bulge pass
 const cam={cx:HOLDS[0].lookAt[0], cy:HOLDS[0].lookAt[1], zoom:HOLDS[0].zoom};   // animated camera
-
-// Lens bulge as a real post-process pass: the whole scene is rendered to an offscreen texture, then a
-// fullscreen quad re-samples it with a radial magnifier centred on the frame. Every element passes
-// through ONE lens — central content is genuinely magnified and straight lines curve (a true dome),
-// which a per-tile scale could never do. uStrength = magnification at centre; falls off (Gaussian,
-// uRadius) to 1.0 toward the edges. mag>=1 so the sample point is always pulled inward → never reads
-// outside the texture (no edge smear).
-const LENS_VERT=`varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position.xy,0.0,1.0); }`;
-const LENS_FRAG=`precision highp float; varying vec2 vUv;
-  uniform sampler2D tDiffuse; uniform float uStrength, uRadius, uAspect;
-  void main(){
-    vec2 c=vUv-0.5; vec2 cc=vec2(c.x*uAspect,c.y); float r2=dot(cc,cc);
-    float mag=1.0+uStrength*exp(-r2/(2.0*uRadius*uRadius));
-    gl_FragColor=texture2D(tDiffuse, 0.5+c/mag);
-  }`;
 
 function initGL(){
   renderer=new THREE.WebGLRenderer({antialias:true,preserveDrawingBuffer:true});
@@ -241,14 +225,6 @@ function initGL(){
   camera=new THREE.OrthographicCamera(0,OUT_W,OUT_H,0,1,4000);  // y-up: top=OUT_H, bottom=0
   camera.position.z=1000;
   unitPlane=new THREE.PlaneGeometry(1,1);
-  // offscreen target + fullscreen lens quad
-  rt=new THREE.WebGLRenderTarget(OUT_W,OUT_H,{minFilter:THREE.LinearFilter,magFilter:THREE.LinearFilter,format:THREE.RGBAFormat});
-  postScene=new THREE.Scene();
-  postCamera=new THREE.OrthographicCamera(-1,1,1,-1,0,1);
-  lensMat=new THREE.ShaderMaterial({uniforms:{
-    tDiffuse:{value:rt.texture}, uStrength:{value:params.bulge}, uRadius:{value:BULGE_R}, uAspect:{value:OUT_W/OUT_H}
-  }, vertexShader:LENS_VERT, fragmentShader:LENS_FRAG, depthTest:false, depthWrite:false});
-  postScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2,2), lensMat));
   animate();
 }
 
@@ -375,7 +351,7 @@ function buildTimeline(){
 function animate(){
   requestAnimationFrame(animate);
   if(tl){ const L=tl.duration()||1; loopProg=tl.time()/L; if(!recording) bar.style.width=(loopProg*100)+'%'; }
-  const cx=cam.cx, cy=cam.cy, z=cam.zoom, par=params.parallax, dr=params.drift, mo=params.momentum;
+  const cx=cam.cx, cy=cam.cy, z=cam.zoom, par=params.parallax, b=params.bulge, dr=params.drift, mo=params.momentum;
   const HW=OUT_W/2, HH=OUT_H/2, TWO_PI=6.28318, lp=loopProg;
   for(const t of tiles){
     if(t.type==='vid' && !t.cropped && t.el.videoWidth){ t.cropped=applyCover(t.mesh.material.map,t.el.videoWidth,t.el.videoHeight,t.tileAR); }
@@ -397,18 +373,18 @@ function animate(){
     const rx=sx-HW, ry=sy-HH, rad=Math.hypot(rx,ry)/DISP_REF;
     const disp=params.disperse*Math.max(0, rad-DISP_START);
     sx+=rx*disp; sy+=ry*disp;
-    // (centre bulge is now a post-process lens pass below — no per-tile scale term)
+    // RIPPLE bulge — pure per-tile SCALE keyed to the tile's live distance from frame-centre. The card
+    // keeps its exact shape (no pixel distortion); it just swells as it rides over the centre and shrinks
+    // as it leaves, like passing over a wave. Smooth Gaussian hump → 1.0 at the edges. b=params.bulge is
+    // the peak swell at dead-centre (e.g. 0.5 = +50%).
+    const dc=Math.hypot(sx-HW,sy-HH)/BULGE_R;
+    const bulge=1+b*Math.exp(-dc*dc);
     const pulse=1+params.pulse*t.amp*Math.sin(lp*TWO_PI*t.cyc+t.ph);
-    const sc=z*params.scale*pulse;
+    const sc=z*params.scale*pulse*bulge;
     t.mesh.scale.set(Math.max(1e-4,t.canvas.w*sc), Math.max(1e-4,t.canvas.h*sc), 1);
     t.mesh.position.set(sx, OUT_H-sy, 0);     // image-y (down) → world y-up
   }
-  if(renderer){
-    // pass 1: render the scene to the offscreen target; pass 2: lens-bulge it onto the canvas
-    lensMat.uniforms.uStrength.value=params.bulge;
-    renderer.setRenderTarget(rt); renderer.render(scene,camera);
-    renderer.setRenderTarget(null); renderer.render(postScene,postCamera);
-  }
+  if(renderer) renderer.render(scene,camera);
 }
 
 // ---------------- controls ----------------
