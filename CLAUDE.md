@@ -27,9 +27,13 @@ Key findings that the code encodes — do not casually undo these:
   rotation (≤3.4°) and a brief mid-pan zoom-punch were intentionally **omitted** for cleanliness.
 - Transitions ease **slow → fast → slow** with a spring **landing** (overshoot-and-settle, NO recoil/
   wind-up): `springEase`, zero velocity at both ends so holds/seam stay clean.
-- **Bulge = measured.** Tracking individual tiles showed the center "bulge" is a **uniform per-tile scale
-  magnification** keyed to distance-from-frame-center — aspect ratio stays locked, edges stay straight.
-  It is NOT a lens warp or a geometric dome. Implemented as CPU scale (no shader). See "Bulge".
+- **Bulge = post-process lens (current).** The measured source bulge was a uniform per-tile *scale*, but
+  that read as almost nothing on screen (a whole cluster of central tiles inflating together has no
+  *relative* curvature). Per user direction it's now a **real radial-magnifier post-process shader**: the
+  scene renders to an offscreen target, then a fullscreen quad re-samples it through a Gaussian magnifier
+  centred on the frame — one lens that **every** element passes through, with genuine fisheye curvature.
+  See "Bulge". (The old CPU per-tile scale was removed; don't reinstate it thinking the shader is "wrong"
+  vs the source — this was a deliberate look choice over fidelity.)
 - Each tile also has an **independent scale pulse** (own phase/integer-cycle/frequency).
 - Crop palette is **4:5-dominant** (≈63%), plus 1:1, 3:2, 16:9 accents. Tiles are center-cropped (cover).
 - The loop must be **seamless** (camera at t=L === camera at t=0) for clean export. Verified: seam delta 0.
@@ -43,12 +47,15 @@ Key findings that the code encodes — do not casually undo these:
   `DISP_REF`/`DISP_START` — dispersion onset.
 - `srcEase` (legacy) / `springEase` (easeInOutBack — the camera transition ease).
 - `initGL()` — Three.js setup: `WebGLRenderer({preserveDrawingBuffer:true})`, **OrthographicCamera in
-  pixel space** (y-up: top=OUT_H, bottom=0), unit `PlaneGeometry`. Starts `animate()`.
+  pixel space** (y-up: top=OUT_H, bottom=0), unit `PlaneGeometry`. Also builds the **post-process lens**:
+  an offscreen `rt` (WebGLRenderTarget) + a fullscreen-quad `postScene`/`postCamera` using `lensMat`
+  (`LENS_VERT`/`LENS_FRAG`). Starts `animate()`.
 - `addFiles / media / addThumb / removeMedia` — upload handling + thumbnail tray.
 - `applyCover()` — sets texture `repeat`/`offset` to center-crop to a tile's ratio.
 - `rebuildScene()` — assigns media→slots and builds tile meshes at FIXED canvas positions (uses `HOLDS`).
 - `buildTimeline()` — the GSAP timeline: tweens the single `cam={cx,cy,zoom}` through `HOLDS` per `PHASE`.
-- `animate()` — per-frame render loop: projects each canvas tile through `cam` (+ parallax + bulge + pulse).
+- `animate()` — per-frame render loop: projects each canvas tile through the (momentum-)lagged `cam`
+  (+ parallax + drift + pulse), then **two render passes**: scene → `rt`, then lens-bulge `rt` → canvas.
 - controls wiring — sliders (Speed/Bulge/Parallax/Drift/Disperse/Scale/Pulse) + Shuffle.
 - `pickMime / export onclick` — MediaRecorder export.
 
@@ -75,15 +82,17 @@ A built **tile** object:
 { mesh, station, type('img'|'vid'), el, tileAR, cropped, z,
   canvas:{cx,cy,w,h},   // FIXED position + size on the big canvas (zoom-1 reference)
   homeLookAt,           // = HOLDS[station].lookAt — parallax anchor (parallax is 0 here)
-  distAtHold,           // screen dist from frame-centre at its hold (legacy; bulge no longer anchored)
   par,                  // DEPTH_PAR[d] parallax gain (NEAR +, FAR −)
   amp,cyc,ph,           // independent pulse: amplitude, integer cycles/loop, phase
-  dax,day,dcx,dcy,dpx,dpy }  // micro-drift ellipse: amplitudes, integer cycles, phases (seamless)
+  dax,day,dcx,dcy,dpx,dpy,   // micro-drift ellipse: amplitudes, integer cycles, phases (seamless)
+  clx,cly, inertia }    // momentum: lagged camera (trails real cam) + size-based inertia (bigger=lazier)
 ```
 There is **no per-tile enter/exit pose and no opacity animation** — tiles are always opaque at a fixed
 canvas spot; the camera framing alone reveals/hides them. Render math (in `animate`): project
 `canvas` through `cam` with parallax `pdx=(homeLookAt−cam.c)*par*parallax` (zero at the tile's hold), then
-`size = canvas.w * cam.zoom * scale * pulse * bulge`.
+`size = canvas.w * cam.zoom * scale * pulse` (no bulge term — bulge is the post-process lens, applied to
+the whole frame after all tiles are drawn). Each tile also has a per-tile **lagged camera** `(clx,cly)`
+for directional **momentum** — see Motion model.
 
 ## Motion model (buildTimeline) — camera pan over one canvas
 The only animated thing is `cam={cx,cy,zoom}`. `buildTimeline` tweens it through `HOLDS` at `PHASE*L`
@@ -102,13 +111,23 @@ NEAR tiles pan more than FAR. All tiles are always rendered, so adjacent-hold ti
 edges (the "big canvas" behavior). There is **no camera pan during holds** — but each tile has its own
 **micro-drift** (below) so holds never feel frozen.
 
-### Bulge (center-scale magnification, CPU — no shader)
-Tiles **swell uniformly** (aspect preserved, edges straight — NOT a lens-warp or dome) as they near the
-frame center: `bulge = 1 + B·max(0, 1 − (dCur/BULGE_R)²)`, `B=params.bulge`, `dCur` = live screen-distance
-from center, `BULGE_R≈720`. **Direct, not anchored** — earlier code divided by the bulge-at-the-tile's-hold
-to keep holds at exact measured size, but that *canceled the visible swell* (most tiles sit near-center at
-their hold). The user wanted the fisheye visible, so the magnification is now applied straight: the central
-hero is genuinely larger at a hold, and tiles clearly grow as they cross the middle mid-pan.
+### Bulge (post-process lens shader — GPU)
+A **real radial-magnifier post-process pass**, not a per-tile scale. `animate()` renders the whole scene
+to an offscreen `WebGLRenderTarget` (`rt`), then draws a fullscreen quad (`postScene`/`postCamera`) whose
+fragment shader (`LENS_FRAG`) re-samples that texture through a Gaussian magnifier centred on the frame:
+```
+mag = 1 + uStrength · exp(−r² / (2·uRadius²))   // r = aspect-corrected dist from centre
+src = 0.5 + (uv−0.5)/mag                         // mag≥1 → sample pulled inward → centre magnified
+```
+`uStrength=params.bulge` (the Bulge slider), `uRadius=BULGE_R` (Gaussian sigma in aspect-corrected uv,
+≈0.38 = dome size), `uAspect=OUT_W/OUT_H`. Because `mag≥1` the sample point is always pulled toward
+centre, so it never reads outside the texture (no edge smear). This is the look the user wanted: one lens
+every element passes through, central content genuinely magnified with straight lines curving (a true
+dome), falling to identity toward the edges. The pass is **static (no time term)** so it cannot affect the
+loop seam, and it renders to the canvas (`setRenderTarget(null)`) so export capture includes it.
+**Why GPU/lens, not the measured CPU scale:** the old per-tile scale inflated the whole central cluster
+uniformly → no *relative* curvature → read as nothing. See the "Why" note above. Earlier per-tile
+constants `DISP_*` etc. are unaffected; bulge no longer touches `t.mesh.scale`.
 
 ### Dispersion (CPU, position)
 As tiles pass `DISP_START` (~0.72 of the half-diagonal) toward the edge they get pushed **radially
@@ -127,6 +146,18 @@ target ~9% near t≈0.78, then settle** — a spring *landing*, not a wind-up. `
 velocity at both ends → holds and the loop seam stay clean. (Earlier used easeInOutBack, but its
 anticipation read as recoil — removed.) `srcEase` is still defined but no longer used for the camera.
 
+### Momentum (directional inertia, render loop, live)
+Each tile projects through a **lagged camera** `(clx,cly)` that eases toward the real `cam` every frame:
+`clx += (cam.cx − clx)·fol`, `fol = clamp(1 − momentum·0.95·inertia, 0.05, 1)`. So during a pan the tile
+**trails** the camera, and when the pan lands it **coasts into place and settles** — true directional
+momentum, not the symmetric drift ellipse. `inertia = clamp(longSide/1100, 0.25, 1.3)` → **bigger tiles
+carry more momentum** (lazier follow, longer settle). Parallax still keys off the *true* `cam`, so each
+composition resolves crisp once the lag settles (it fully settles within each ~1.5s hold). `momentum=0` →
+`fol=1` → exact follow → identical to the old no-momentum behavior. **Seam:** the lag carries state across
+the loop, so export (`exportBtn`) first runs `warmMomentum()` — two synchronous passes simulating the lag
+against the periodic camera path — to seat `clx/cly` on the steady-state orbit before recording, so the
+recorded loop closes seamlessly. Preview self-converges (it loops continuously).
+
 ### Pulse / Scale (render loop, live, no rebuild)
 - Pulse: `1 + pulse*amp*sin(loopProg*2π*cyc + ph)`. `cyc` is an **integer** → seamless. Keep it integer.
 - Global Scale multiplies **size only** (not position).
@@ -135,9 +166,10 @@ anticipation read as recoil — removed.) `srcEase` is still defined but no long
 | UI       | param          | notes |
 |----------|----------------|-------|
 | Speed    | `loopSec`      | total loop seconds; rebuilds timeline |
-| Bulge    | `bulge`        | center fisheye magnification strength (live) |
+| Bulge    | `bulge`        | post-process lens magnification at frame centre (`uStrength`, live) |
 | Parallax | `parallax`     | NEAR-vs-FAR pan separation (live) |
 | Drift    | `drift`        | per-tile micro-drift amplitude — keeps holds alive (live) |
+| Momentum | `momentum`     | per-tile lagged-camera inertia — tiles coast/settle after a pan; scales w/ tile size (live) |
 | Disperse | `disperse`     | how much exiting tiles spread radially outward (live) |
 | Scale    | `scale`        | global size multiplier (live) |
 | Pulse    | `pulse`        | independent per-tile scale swing (live) |
