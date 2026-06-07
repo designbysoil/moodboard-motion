@@ -96,8 +96,8 @@
       <input type="range" id="speed" min="6" max="30" step="0.5" value="15">
     </div>
     <div class="ctl">
-      <div class="label"><span>Bulge</span><span class="val" id="blVal">45%</span></div>
-      <input type="range" id="bulge" min="0" max="120" step="1" value="45">
+      <div class="label"><span>Bulge</span><span class="val" id="blVal">75%</span></div>
+      <input type="range" id="bulge" min="0" max="150" step="1" value="75">
     </div>
     <div class="ctl">
       <div class="label"><span>Parallax</span><span class="val" id="plVal">60%</span></div>
@@ -151,7 +151,7 @@ const tray=document.getElementById('tray'), addBtn=document.getElementById('addB
 const fileInput=document.getElementById('file'), bar=document.getElementById('bar');
 const hint=document.getElementById('hint'), exportBtn=document.getElementById('export'), shuffleBtn=document.getElementById('shuffle');
 
-const params={ loopSec:15, bulge:0.45, parallax:0.60, drift:0.45, momentum:0.50, disperse:0.55, scale:1.0, pulse:0.30 };
+const params={ loopSec:15, bulge:0.75, parallax:0.60, drift:0.45, momentum:0.50, disperse:0.55, scale:1.0, pulse:0.30 };
 
 // ---- three held compositions, re-measured from the source frames (t≈0.5 / 4.6 / 11.2s) ----
 const SCENES=[
@@ -193,7 +193,7 @@ const PHASE=[
 ];
 // depth parallax: NEAR tiles pan more than FAR (zero at a tile's own hold so holds stay crisp).
 const DEPTH_PAR={NEAR:0.12, MID:0.0, FAR:-0.08};
-const BULGE_R=450;   // ripple radius (px): Gaussian falloff of the per-tile centre-scale swell from frame-centre
+const BULGE_R=800;   // ripple radius (px): Gaussian falloff of the per-tile centre-scale swell from frame-centre
 const DISP_REF=Math.hypot(OUT_W,OUT_H)/2, DISP_START=0.72;   // dispersion: tiles past this radius (near
                                                              // the frame edge) push radially outward → spread apart as they exit
 

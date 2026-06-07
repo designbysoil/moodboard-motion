@@ -116,8 +116,8 @@ dc    = hypot(sx−HW, sy−HH) / BULGE_R           // live screen-distance from
 bulge = 1 + b·exp(−dc²)                           // smooth Gaussian hump: peak swell at centre → 1 at edges
 sc    = z · scale · pulse · bulge                 // applied to size only (not position)
 ```
-`b=params.bulge` is the peak swell at dead-centre (0.45 default = +45%); `BULGE_R≈450px` sets how
-concentrated the ripple is (smaller = snappier). As the camera pans a card across the frame, the card scales up riding over the
+`b=params.bulge` is the peak swell at dead-centre (0.75 default = +75%); `BULGE_R≈800px` sets how
+concentrated the ripple is (smaller = snappier, larger = wider/gentler falloff). As the camera pans a card across the frame, the card scales up riding over the
 centre and back down leaving it — "riding a ripple". **No pixel warp, no shader, no render target** — just
 `t.mesh.scale`. **Do not** replace this with a lens/post-process distortion: the user explicitly wants
 cards to stay rectangular (a fisheye-lens version was built and rejected). Applies to size only, so it
