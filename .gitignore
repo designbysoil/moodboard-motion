@@ -3,3 +3,4 @@ sample set/
 
 # macOS
 .DS_Store
+.playwright-mcp/
