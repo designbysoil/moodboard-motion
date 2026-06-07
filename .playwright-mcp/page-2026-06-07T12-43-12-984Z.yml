@@ -1,0 +1,57 @@
+- generic [active] [ref=e1]:
+  - banner [ref=e2]:
+    - generic [ref=e3]: Drift
+    - generic [ref=e4]: moodboard motion · webgl
+    - generic [ref=e5]: "16 : 9 — 1920×1080"
+  - main [ref=e6]:
+    - generic [ref=e7]:
+      - generic [ref=e10] [cursor=pointer]:
+        - generic [ref=e11]: +
+        - generic [ref=e12]: Drop images or mp4s
+        - generic [ref=e13]: or click to browse · the camera pans across three held compositions
+      - button "+" [ref=e17] [cursor=pointer]
+    - complementary [ref=e18]:
+      - generic [ref=e19]:
+        - generic [ref=e20]:
+          - generic [ref=e21]: Speed
+          - generic [ref=e22]: 15.0s loop
+        - slider [ref=e23] [cursor=pointer]: "15"
+      - generic [ref=e24]:
+        - generic [ref=e25]:
+          - generic [ref=e26]: Bulge
+          - generic [ref=e27]: 28%
+        - slider [ref=e28] [cursor=pointer]: "28"
+      - generic [ref=e29]:
+        - generic [ref=e30]:
+          - generic [ref=e31]: Parallax
+          - generic [ref=e32]: 60%
+        - slider [ref=e33] [cursor=pointer]: "60"
+      - generic [ref=e34]:
+        - generic [ref=e35]:
+          - generic [ref=e36]: Drift
+          - generic [ref=e37]: 45%
+        - slider [ref=e38] [cursor=pointer]: "45"
+      - generic [ref=e39]:
+        - generic [ref=e40]:
+          - generic [ref=e41]: Momentum
+          - generic [ref=e42]: 50%
+        - slider [ref=e43] [cursor=pointer]: "50"
+      - generic [ref=e44]:
+        - generic [ref=e45]:
+          - generic [ref=e46]: Disperse
+          - generic [ref=e47]: 55%
+        - slider [ref=e48] [cursor=pointer]: "55"
+      - generic [ref=e49]:
+        - generic [ref=e50]:
+          - generic [ref=e51]: Scale
+          - generic [ref=e52]: 100%
+        - slider [ref=e53] [cursor=pointer]: "100"
+      - generic [ref=e54]:
+        - generic [ref=e55]:
+          - generic [ref=e56]: Pulse
+          - generic [ref=e57]: 30%
+        - slider [ref=e58] [cursor=pointer]: "30"
+      - generic [ref=e59]:
+        - button "Shuffle layout" [ref=e60] [cursor=pointer]
+        - button "Export mp4" [disabled] [ref=e61]
+        - generic [ref=e62]: Add media to begin.

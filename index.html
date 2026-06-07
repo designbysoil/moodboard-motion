@@ -108,6 +108,10 @@
       <input type="range" id="drift" min="0" max="150" step="1" value="45">
     </div>
     <div class="ctl">
+      <div class="label"><span>Momentum</span><span class="val" id="moVal">50%</span></div>
+      <input type="range" id="momentum" min="0" max="150" step="1" value="50">
+    </div>
+    <div class="ctl">
       <div class="label"><span>Disperse</span><span class="val" id="dsVal">55%</span></div>
       <input type="range" id="disperse" min="0" max="150" step="1" value="55">
     </div>
@@ -147,7 +151,7 @@ const tray=document.getElementById('tray'), addBtn=document.getElementById('addB
 const fileInput=document.getElementById('file'), bar=document.getElementById('bar');
 const hint=document.getElementById('hint'), exportBtn=document.getElementById('export'), shuffleBtn=document.getElementById('shuffle');
 
-const params={ loopSec:15, bulge:0.28, parallax:0.60, drift:0.45, disperse:0.55, scale:1.0, pulse:0.30 };
+const params={ loopSec:15, bulge:0.28, parallax:0.60, drift:0.45, momentum:0.50, disperse:0.55, scale:1.0, pulse:0.30 };
 
 // ---- three held compositions, re-measured from the source frames (t≈0.5 / 4.6 / 11.2s) ----
 const SCENES=[
@@ -306,6 +310,10 @@ function rebuildScene(){
       mesh, station:s.station, type:m.type, el:m.el, tileAR, cropped, z,
       canvas:{cx:ccx, cy:ccy, w:cw, h:ch},   // fixed position+size on the big canvas
       homeLookAt:hold.lookAt, par:DEPTH_PAR[s.d],
+      // directional momentum: a per-tile LAGGED camera (clx,cly) trails the real cam, so when the
+      // camera pans the tile lags behind and, when the pan lands, the tile keeps coasting into place
+      // and settles. inertia scales with size → BIG tiles carry more momentum (lag/settle longer).
+      clx:hold.lookAt[0], cly:hold.lookAt[1], inertia:Math.min(1.3,Math.max(0.25,Math.max(cw,ch)/1100)),
       amp:0.5+rnd()*0.5, cyc:(rnd()<0.45?1:(rnd()<0.8?2:3)), ph:rnd()*6.28318,
       // per-tile micro-drift (own ellipse, integer cycles/loop → seamless) — keeps holds alive.
       // Amplitude scales with the tile's own size (+ a floor) so BIG elements drift proportionally
@@ -342,16 +350,23 @@ function buildTimeline(){
 function animate(){
   requestAnimationFrame(animate);
   if(tl){ const L=tl.duration()||1; loopProg=tl.time()/L; if(!recording) bar.style.width=(loopProg*100)+'%'; }
-  const cx=cam.cx, cy=cam.cy, z=cam.zoom, par=params.parallax, b=params.bulge, dr=params.drift;
+  const cx=cam.cx, cy=cam.cy, z=cam.zoom, par=params.parallax, b=params.bulge, dr=params.drift, mo=params.momentum;
   const HW=OUT_W/2, HH=OUT_H/2, TWO_PI=6.28318, lp=loopProg;
   for(const t of tiles){
     if(t.type==='vid' && !t.cropped && t.el.videoWidth){ t.cropped=applyCover(t.mesh.material.map,t.el.videoWidth,t.el.videoHeight,t.tileAR); }
+    // directional momentum: ease the tile's LAGGED camera (clx,cly) toward the real cam. fol<1 makes it
+    // trail during a pan and coast/settle into place when the pan lands; bigger inertia → lazier follow
+    // → more momentum. fol=1 (momentum 0, or once settled during a hold) == exact follow, no lag.
+    const fol=Math.max(0.05,Math.min(1,1-mo*0.95*t.inertia));
+    t.clx+=(cx-t.clx)*fol; t.cly+=(cy-t.cly)*fol;
     // per-tile micro-drift (canvas space) — a small ellipse, always on, so holds never feel frozen
     const drx=dr*t.dax*Math.sin(lp*TWO_PI*t.dcx+t.dpx), dry=dr*t.day*Math.cos(lp*TWO_PI*t.dcy+t.dpy);
     // project canvas → screen (image coords). Depth parallax: offset grows as the camera leaves this
-    // tile's own hold (so each composition is parallax-free, i.e. crisp, at its own hold).
+    // tile's own hold (so each composition is parallax-free, i.e. crisp, at its own hold). The base
+    // camera subtraction uses the LAGGED camera (momentum); parallax still keys off the true cam so the
+    // composition resolves crisp at its own hold once the lag has settled.
     const pdx=(t.homeLookAt[0]-cx)*t.par*par, pdy=(t.homeLookAt[1]-cy)*t.par*par;
-    let sx=(t.canvas.cx+drx-cx+pdx)*z+HW, sy=(t.canvas.cy+dry-cy+pdy)*z+HH;
+    let sx=(t.canvas.cx+drx-t.clx+pdx)*z+HW, sy=(t.canvas.cy+dry-t.cly+pdy)*z+HH;
     // dispersion — push tiles radially outward once they pass DISP_START toward the edge, so they
     // spread apart (not move in lockstep) as they exit the frame. Zero inside → held comps stay tight.
     const rx=sx-HW, ry=sy-HH, rad=Math.hypot(rx,ry)/DISP_REF;
@@ -374,6 +389,7 @@ const speed=document.getElementById('speed'), spdVal=document.getElementById('sp
 const bulge=document.getElementById('bulge'), blVal=document.getElementById('blVal');
 const parallax=document.getElementById('parallax'), plVal=document.getElementById('plVal');
 const drift=document.getElementById('drift'), drVal=document.getElementById('drVal');
+const momentum=document.getElementById('momentum'), moVal=document.getElementById('moVal');
 const disperse=document.getElementById('disperse'), dsVal=document.getElementById('dsVal');
 const scale=document.getElementById('scale'), scVal=document.getElementById('scVal');
 const pulse=document.getElementById('pulse'), puVal=document.getElementById('puVal');
@@ -381,6 +397,7 @@ speed.oninput=()=>{params.loopSec=+speed.value;spdVal.textContent=(+speed.value)
 bulge.oninput=()=>{params.bulge=+bulge.value/100;blVal.textContent=bulge.value+'%';};
 parallax.oninput=()=>{params.parallax=+parallax.value/100;plVal.textContent=parallax.value+'%';};
 drift.oninput=()=>{params.drift=+drift.value/100;drVal.textContent=drift.value+'%';};
+momentum.oninput=()=>{params.momentum=+momentum.value/100;moVal.textContent=momentum.value+'%';};
 disperse.oninput=()=>{params.disperse=+disperse.value/100;dsVal.textContent=disperse.value+'%';};
 scale.oninput=()=>{params.scale=+scale.value/100;scVal.textContent=scale.value+'%';};
 pulse.oninput=()=>{params.pulse=+pulse.value/100;puVal.textContent=pulse.value+'%';};
@@ -403,6 +420,18 @@ exportBtn.onclick=()=>{
   const isMp4=mime.startsWith('video/mp4');
   recording=true; exportBtn.disabled=true; shuffleBtn.disabled=true;
   exportBtn.classList.add('rec'); exportBtn.innerHTML='<span class="dotrec"></span> Recording…';
+  // Warm the momentum lag onto its periodic steady-state orbit before recording. The lag carries state
+  // across the loop boundary, so seeding it to one point would leave the last frame mid-coast and the
+  // first settled → a seam jump. Here we synchronously simulate the lag against the (periodic) camera
+  // path for two passes; afterwards clx/cly sit on the orbit so the recorded loop closes seamlessly.
+  (function warmMomentum(){
+    const L=tl.duration(), steps=Math.max(1,Math.round(L*60));
+    for(let pass=0;pass<2;pass++) for(let i=0;i<steps;i++){
+      tl.time((i/steps)*L);
+      for(const t of tiles){ const fol=Math.max(0.05,Math.min(1,1-params.momentum*0.95*t.inertia));
+        t.clx+=(cam.cx-t.clx)*fol; t.cly+=(cam.cy-t.cly)*fol; }
+    }
+  })();
   tl.pause(0); tl.play();
   const stream=renderer.domElement.captureStream(30), chunks=[];
   const rec=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:14000000});
