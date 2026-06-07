@@ -205,7 +205,7 @@ function srcEase(p){ if(p<=0)return 0; if(p>=1)return 1; const x=p*_N,i=Math.flo
 // springy camera ease WITHOUT recoil: smootherstep (slow → fast → slow, no anticipation dip) plus a
 // terminal overshoot bump that peaks ~t=0.8 a few % past the target and settles. Zero velocity at BOTH
 // ends (the bump and smootherstep both flatten at 0 and 1) → holds and the loop seam stay clean.
-const _OS=0.60;   // overshoot strength (≈9% past target, peak ~t=0.78)
+const _OS=0.20;   // overshoot strength (≈3% past target, peak ~t=0.78)
 function springEase(t){ if(t<=0)return 0; if(t>=1)return 1;
   const s=Math.sin(Math.PI*t); return t*t*t*(t*(t*6-15)+10) + _OS*t*t*s*s; }
 
@@ -307,8 +307,12 @@ function rebuildScene(){
       canvas:{cx:ccx, cy:ccy, w:cw, h:ch},   // fixed position+size on the big canvas
       homeLookAt:hold.lookAt, par:DEPTH_PAR[s.d],
       amp:0.5+rnd()*0.5, cyc:(rnd()<0.45?1:(rnd()<0.8?2:3)), ph:rnd()*6.28318,
-      // per-tile micro-drift (own ellipse, integer cycles/loop → seamless) — keeps holds alive
-      dax:18+rnd()*22, day:18+rnd()*22, dcx:(rnd()<0.6?1:2), dcy:(rnd()<0.6?1:2),
+      // per-tile micro-drift (own ellipse, integer cycles/loop → seamless) — keeps holds alive.
+      // Amplitude scales with the tile's own size (+ a floor) so BIG elements drift proportionally
+      // too — a fixed-px ellipse was invisible on large tiles, fine on small ones. Cycles are kept
+      // higher (2–4/loop) so each ~1.5s hold traverses enough arc to read as a continuous glide,
+      // not a snap-then-freeze. dcx/dcy stay integers → loop seamless.
+      dax:14+Math.max(cw,ch)*(0.020+rnd()*0.016), day:14+Math.max(cw,ch)*(0.020+rnd()*0.016), dcx:(rnd()<0.5?2:(rnd()<0.8?3:4)), dcy:(rnd()<0.5?2:(rnd()<0.8?3:4)),
       dpx:rnd()*6.28318, dpy:rnd()*6.28318
     });
   }
