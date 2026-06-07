@@ -25,8 +25,11 @@ Key findings that the code encodes — do not casually undo these:
 - **The camera path was traced precisely** (OpenCV ORB + accumulated similarity over all 360 frames).
   Path: home → pan **down-right** to B → pan **up** to C → back to home. See `HOLDS`. The measured
   rotation (≤3.4°) and a brief mid-pan zoom-punch were intentionally **omitted** for cleanliness.
-- Transitions ease **slow → fast → slow** with a spring **landing** (overshoot-and-settle, NO recoil/
-  wind-up): `springEase`, zero velocity at both ends so holds/seam stay clean.
+- Transitions use a **decel-biased ease-out** (`panEase`): gentle build, speed peaks early (~40%), then a
+  long deceleration into the hold. **No overshoot, no spring-back** — zero velocity at both ends so holds/
+  seam stay clean. The carry-through *after* arrival comes from per-tile **momentum**, not a camera spring.
+  (An earlier `springEase` added a terminal overshoot bump — it read as the camera "coming back into
+  position" and was removed. See "Easing".)
 - **Bulge = ripple-scale (current), NOT distortion.** Cards must keep their exact shape — **no pixel
   warp**. The bulge is a **per-tile uniform SCALE** keyed to the tile's live distance from frame-centre:
   a card swells as it rides over the centre and shrinks as it leaves, like passing over a wave/ripple.
@@ -45,7 +48,7 @@ Key findings that the code encodes — do not casually undo these:
 - `HOLDS` — the 3 traced camera framings `{lookAt:[x,y], zoom}`; `PHASE` — loop-phase keyframes (uneven
   hold/transition timing). `DEPTHZ` — depth→renderOrder; `DEPTH_PAR` — depth→parallax gain; `BULGE_R`;
   `DISP_REF`/`DISP_START` — dispersion onset.
-- `srcEase` (legacy) / `springEase` (easeInOutBack — the camera transition ease).
+- `srcEase` (legacy, unused) / `panEase` (decel-biased ease-out — the camera transition ease).
 - `initGL()` — Three.js setup: `WebGLRenderer({preserveDrawingBuffer:true})`, **OrthographicCamera in
   pixel space** (y-up: top=OUT_H, bottom=0), unit `PlaneGeometry`. Starts `animate()`.
 - `addFiles / media / addThumb / removeMedia` — upload handling + thumbnail tray.
@@ -93,8 +96,9 @@ also has a per-tile **lagged camera** `(clx,cly)` for directional **momentum** �
 
 ## Motion model (buildTimeline) — camera pan over one canvas
 The only animated thing is `cam={cx,cy,zoom}`. `buildTimeline` tweens it through `HOLDS` at `PHASE*L`
-times: each transition is one `srcEase` tween from one hold's `{lookAt,zoom}` to the next; **hold spans
-have no tween** (camera sits still). A 0.001s pin tween at `L-0.001` fixes total duration = `L`.
+times: each transition is one `panEase` tween from one hold's `{lookAt,zoom}` to the next; **hold spans
+have no tween** (camera sits still — tiles stay alive via momentum coast + ambient drift, not camera
+motion). A 0.001s pin tween at `L-0.001` fixes total duration = `L`.
 
 The first keyframe sets `cam` to hold A; the last transition (C→home) returns it to hold A, so
 **cam at t=L === cam at t=0 → seamless** (verified: seam delta == 0). Source loop didn't perfectly close,
@@ -128,25 +132,33 @@ As tiles pass `DISP_START` (~0.72 of the half-diagonal) toward the edge they get
 outward**: `sx += (sx−cx)·disperse·max(0, rad−DISP_START)`. Zero inside the frame, so held compositions
 stay tight; exiting tiles **spread apart** instead of moving in lockstep. `disperse=params.disperse`.
 
-### Micro-drift (CPU, position)
+### Micro-drift (CPU, position) — slow ambient float
 Every tile drifts on its own small ellipse, always on (incl. holds), so nothing is ever static:
 `drx = drift·dax·sin(loopProg·2π·dcx + dpx)`, `dry = drift·day·cos(loopProg·2π·dcy + dpy)`. `dcx,dcy` are
-**integers** → seamless across the loop. `drift=params.drift`.
+**integers** → seamless across the loop. `drift=params.drift`. **Kept LOW frequency (1–2 cycles/loop) on
+purpose:** momentum (below) now provides the post-pan glide, so drift must be slow enough that its velocity
+never *fights/reverses* the coast at a hold entry. (An earlier 2–4 cycle version made holds feel crude —
+the fast ellipse reversed direction just as the pan settled.) The post-pan glide itself is **Momentum** —
+see its subsection below.
 
 ### Easing
-Camera transitions use **`springEase`** = smootherstep + a terminal overshoot bump
-(`t³(6t²−15t+10) + _OS·t²·sin²(πt)`). Slow start (NO recoil/anticipation dip), accelerate, **overshoot the
-target ~9% near t≈0.78, then settle** — a spring *landing*, not a wind-up. `_OS` sets the overshoot. Zero
-velocity at both ends → holds and the loop seam stay clean. (Earlier used easeInOutBack, but its
-anticipation read as recoil — removed.) `srcEase` is still defined but no longer used for the camera.
+Camera transitions use **`panEase`** — a **decel-biased ease-out** with **no overshoot**. It's the integral
+of a velocity bell `v(p)=p²·(1−p)³` (peak speed at p≈0.4), precomputed into a cumulative table `_pcum`: the
+pan builds gently, peaks early, then has a long smooth deceleration into the hold. Zero velocity at both
+ends → no jerk leaving a hold, clean arrival, clean loop seam. The "land and settle" feel comes from the
+per-tile **momentum** coast, NOT a camera spring. (History: `springEase` added a terminal overshoot bump
+that read as the camera "coming back into position" at each hold — removed. Even earlier `easeInOutBack`'s
+anticipation read as recoil — also removed. `srcEase` legacy table is still defined but unused.)
 
 ### Momentum (directional inertia, render loop, live)
 Each tile projects through a **lagged camera** `(clx,cly)` that eases toward the real `cam` every frame:
-`clx += (cam.cx − clx)·fol`, `fol = clamp(1 − momentum·0.95·inertia, 0.05, 1)`. So during a pan the tile
-**trails** the camera, and when the pan lands it **coasts into place and settles** — true directional
+`clx += (cam.cx − clx)·fol`, `fol = max(0.03, (1 − momentum·0.85)^(1 + inertia·1.6))` — small `fol` = a
+**long, monotonic coast** (exponential approach, never overshoots → never reverses). So during a pan the
+tile **trails** the camera, and when the pan lands it **coasts into place and settles** — true directional
 momentum, not the symmetric drift ellipse. `inertia = clamp(longSide/1100, 0.25, 1.3)` → **bigger tiles
-carry more momentum** (lazier follow, longer settle). Parallax still keys off the *true* `cam`, so each
-composition resolves crisp once the lag settles (it fully settles within each ~1.5s hold). `momentum=0` →
+carry more momentum** (lazier follow, longer settle). Default `momentum=0.6` → big tiles coast ~0.4s into
+the hold (the carry-through), small tiles settle quicker; all fully settle within each ~1.5s hold. Parallax
+still keys off the *true* `cam`, so each composition resolves crisp once the lag settles. `momentum=0` →
 `fol=1` → exact follow → identical to the old no-momentum behavior. **Seam:** the lag carries state across
 the loop, so export (`exportBtn`) first runs `warmMomentum()` — two synchronous passes simulating the lag
 against the periodic camera path — to seat `clx/cly` on the steady-state orbit before recording, so the
@@ -191,7 +203,9 @@ records exactly `loopSec` — so the recording is one clean, seamless loop. Outp
 - Ortho camera is in **pixel space** (1920×1080), y-up; layouts convert with `y = OUT_H - hy*OUT_H`.
 - `depthTest:false, depthWrite:false, transparent:true` on tile materials; layering is by `renderOrder = z`.
 - Browser-storage APIs are not used and should not be (artifact constraint). No `<form>` posts.
-- Holds are flat (camera still). Don't add motion during a hold span.
+- Holds are flat **for the camera** (no `cam` tween during a hold span). Tile-level life during a hold is
+  expected and intentional — the momentum coast settling + the slow ambient drift. Don't animate `cam`
+  during a hold; do keep the per-tile motion.
 
 ## Re-mapping a hold from a new source frame (the workflow used)
 The `SCENES` numbers came from detecting tile bounding boxes in clean **held** frames; the `HOLDS`

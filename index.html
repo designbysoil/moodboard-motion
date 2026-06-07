@@ -108,8 +108,8 @@
       <input type="range" id="drift" min="0" max="150" step="1" value="45">
     </div>
     <div class="ctl">
-      <div class="label"><span>Momentum</span><span class="val" id="moVal">50%</span></div>
-      <input type="range" id="momentum" min="0" max="150" step="1" value="50">
+      <div class="label"><span>Momentum</span><span class="val" id="moVal">60%</span></div>
+      <input type="range" id="momentum" min="0" max="150" step="1" value="60">
     </div>
     <div class="ctl">
       <div class="label"><span>Disperse</span><span class="val" id="dsVal">55%</span></div>
@@ -151,7 +151,7 @@ const tray=document.getElementById('tray'), addBtn=document.getElementById('addB
 const fileInput=document.getElementById('file'), bar=document.getElementById('bar');
 const hint=document.getElementById('hint'), exportBtn=document.getElementById('export'), shuffleBtn=document.getElementById('shuffle');
 
-const params={ loopSec:15, bulge:0.75, parallax:0.60, drift:0.45, momentum:0.50, disperse:0.55, scale:1.0, pulse:0.30 };
+const params={ loopSec:15, bulge:0.75, parallax:0.60, drift:0.45, momentum:0.60, disperse:0.55, scale:1.0, pulse:0.30 };
 
 // ---- three held compositions, re-measured from the source frames (t≈0.5 / 4.6 / 11.2s) ----
 const SCENES=[
@@ -206,12 +206,14 @@ const _tot=_cum[_N];
 function srcEase(p){ if(p<=0)return 0; if(p>=1)return 1; const x=p*_N,i=Math.floor(x),f=x-i;
   return (_cum[i]+(_cum[Math.min(i+1,_N)]-_cum[i])*f)/_tot; }
 
-// springy camera ease WITHOUT recoil: smootherstep (slow → fast → slow, no anticipation dip) plus a
-// terminal overshoot bump that peaks ~t=0.8 a few % past the target and settles. Zero velocity at BOTH
-// ends (the bump and smootherstep both flatten at 0 and 1) → holds and the loop seam stay clean.
-const _OS=0.20;   // overshoot strength (≈3% past target, peak ~t=0.78)
-function springEase(t){ if(t<=0)return 0; if(t>=1)return 1;
-  const s=Math.sin(Math.PI*t); return t*t*t*(t*(t*6-15)+10) + _OS*t*t*s*s; }
+// natural camera pan ease: NO overshoot, NO spring-back. Integral of a decel-biased velocity bell
+// v(p)=p^2*(1-p)^3 (peak speed ~p=0.4) → the pan builds gently, peaks early, then has a LONG, smooth
+// deceleration ("ease out") into the hold. Zero velocity at both ends → no jerk leaving a hold, clean
+// arrival, clean loop seam. The carry-through after arrival comes from per-tile momentum, not a spring.
+const _PN=240, _pcum=[0]; (function(){let a=0;for(let i=1;i<=_PN;i++){const p=i/_PN;a+=p*p*Math.pow(1-p,3);_pcum.push(a);}})();
+const _ptot=_pcum[_PN];
+function panEase(p){ if(p<=0)return 0; if(p>=1)return 1; const x=p*_PN,i=Math.floor(x),f=x-i;
+  return (_pcum[i]+(_pcum[Math.min(i+1,_PN)]-_pcum[i])*f)/_ptot; }
 
 // ---------------- three.js setup ----------------
 let renderer,scene,camera,unitPlane,tiles=[],tl=null,seed=(Math.random()*1e9)|0,recording=false,loopProg=0;
@@ -316,12 +318,11 @@ function rebuildScene(){
       // and settles. inertia scales with size → BIG tiles carry more momentum (lag/settle longer).
       clx:hold.lookAt[0], cly:hold.lookAt[1], inertia:Math.min(1.3,Math.max(0.25,Math.max(cw,ch)/1100)),
       amp:0.5+rnd()*0.5, cyc:(rnd()<0.45?1:(rnd()<0.8?2:3)), ph:rnd()*6.28318,
-      // per-tile micro-drift (own ellipse, integer cycles/loop → seamless) — keeps holds alive.
-      // Amplitude scales with the tile's own size (+ a floor) so BIG elements drift proportionally
-      // too — a fixed-px ellipse was invisible on large tiles, fine on small ones. Cycles are kept
-      // higher (2–4/loop) so each ~1.5s hold traverses enough arc to read as a continuous glide,
-      // not a snap-then-freeze. dcx/dcy stay integers → loop seamless.
-      dax:14+Math.max(cw,ch)*(0.020+rnd()*0.016), day:14+Math.max(cw,ch)*(0.020+rnd()*0.016), dcx:(rnd()<0.5?2:(rnd()<0.8?3:4)), dcy:(rnd()<0.5?2:(rnd()<0.8?3:4)),
+      // per-tile micro-drift (own ellipse, integer cycles/loop → seamless) — a slow ambient FLOAT that
+      // keeps holds from going dead-still. Kept LOW frequency (1–2/loop) on purpose: momentum now
+      // provides the post-pan glide, so drift must be slow enough that its velocity never fights / reverses
+      // the coast at hold entry. Amplitude scales with tile size. dcx/dcy stay integers → loop seamless.
+      dax:14+Math.max(cw,ch)*(0.018+rnd()*0.014), day:14+Math.max(cw,ch)*(0.018+rnd()*0.014), dcx:(rnd()<0.65?1:2), dcy:(rnd()<0.65?1:2),
       dpx:rnd()*6.28318, dpy:rnd()*6.28318
     });
   }
@@ -329,9 +330,10 @@ function rebuildScene(){
 }
 
 // ---------------- GSAP timeline: a single camera panning across the big canvas ----------------
-// `cam` is the only thing animated — it pauses on each hold (PHASE flat spans) and springs between them
-// (springEase). Tiles are fixed on the canvas; the render loop reads `cam` and projects them. The last
-// keyframe returns to hold A, so cam at t=L === cam at t=0 → seamless loop.
+// `cam` is the only thing animated — it dwells on each hold (PHASE flat spans) and eases between them
+// (panEase, decel-biased, no overshoot). Tiles are fixed on the canvas; the render loop reads `cam` and
+// projects them — momentum lag makes them coast into place after the pan. The last keyframe returns to
+// hold A, so cam at t=L === cam at t=0 → seamless loop.
 function buildTimeline(){
   if(tl){ tl.kill(); tl=null; }
   if(!tiles.length) return;
@@ -342,7 +344,7 @@ function buildTimeline(){
     const [ph,hi]=PHASE[i], prevPh=PHASE[i-1][0], prevHi=PHASE[i-1][1];
     if(hi===prevHi) continue;                                // hold span: camera stays put (no tween)
     const H=HOLDS[hi];
-    tl.to(cam,{cx:H.lookAt[0], cy:H.lookAt[1], zoom:H.zoom, duration:(ph-prevPh)*L, ease:springEase}, prevPh*L);
+    tl.to(cam,{cx:H.lookAt[0], cy:H.lookAt[1], zoom:H.zoom, duration:(ph-prevPh)*L, ease:panEase}, prevPh*L);
   }
   tl.to({_p:0},{_p:1,duration:0.001}, L-0.001);  // pin total duration to exactly L
 }
@@ -357,8 +359,10 @@ function animate(){
     if(t.type==='vid' && !t.cropped && t.el.videoWidth){ t.cropped=applyCover(t.mesh.material.map,t.el.videoWidth,t.el.videoHeight,t.tileAR); }
     // directional momentum: ease the tile's LAGGED camera (clx,cly) toward the real cam. fol<1 makes it
     // trail during a pan and coast/settle into place when the pan lands; bigger inertia → lazier follow
-    // → more momentum. fol=1 (momentum 0, or once settled during a hold) == exact follow, no lag.
-    const fol=Math.max(0.05,Math.min(1,1-mo*0.95*t.inertia));
+    // → longer coast. Monotonic (exponential) approach → never reverses. The exponent makes the coast
+    // span a good chunk of the hold (the carry-through), instead of snapping settled in a few frames.
+    // fol=1 (momentum 0) == exact follow, no lag.
+    const fol=Math.max(0.03,Math.pow(1-mo*0.85, 1+t.inertia*1.6));
     t.clx+=(cx-t.clx)*fol; t.cly+=(cy-t.cly)*fol;
     // per-tile micro-drift (canvas space) — a small ellipse, always on, so holds never feel frozen
     const drx=dr*t.dax*Math.sin(lp*TWO_PI*t.dcx+t.dpx), dry=dr*t.day*Math.cos(lp*TWO_PI*t.dcy+t.dpy);
