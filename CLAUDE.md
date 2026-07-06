@@ -94,7 +94,7 @@ A built **tile** object:
 There is **no per-tile enter/exit pose and no opacity animation** — tiles are always opaque at a fixed
 canvas spot; the camera framing alone reveals/hides them. Render math (in `animate`): project
 `canvas` through `cam` with parallax `pdx=(homeLookAt−cam.c)*par*parallax` (zero at the tile's hold), then
-`size = canvas.w * cam.zoom * scale * pulse * bulge` (bulge = per-tile ripple-scale, see Bulge). Each tile
+`size = canvas.w * cam.zoom * scale * pulse * bulge` (bulge = per-tile dome-scale, see Bulge). Each tile
 also has a per-tile **lagged camera** `(clx,cly)` for directional **momentum** — see Motion model.
 
 ## Motion model (buildTimeline) — camera pan over one canvas
@@ -115,20 +115,26 @@ NEAR tiles pan more than FAR. All tiles are always rendered, so adjacent-hold ti
 edges (the "big canvas" behavior). There is **no camera pan during holds** — but each tile has its own
 **micro-drift** (below) so holds never feel frozen.
 
-### Bulge (per-tile ripple-scale, CPU — NO distortion)
+### Bulge (per-tile dome-scale, CPU — NO distortion)
 A **pure per-tile uniform scale** in the render loop — the card keeps its exact shape, only its size
-changes with how close its screen centre is to the frame centre:
+changes with how close its screen centre is to the frame centre (riding over an invisible 3D dome):
 ```
-dc    = hypot(sx−HW, sy−HH) / BULGE_R           // live screen-distance from frame-centre, normalized
-bulge = 1 + b·exp(−dc²)                           // smooth Gaussian hump: peak swell at centre → 1 at edges
-sc    = z · scale · pulse · bulge                 // applied to size only (not position)
+dist  = hypot(sx−HW, sy−HH)                                      // live screen-distance from frame-centre
+bulge = max(0.12, 1 + b·(exp(−(dist/BULGE_SIG)²) − BULGE_C0)/(1−BULGE_C0))
+sc    = sizeMul · scale · pulse · bulge                          // applied to size only (not position)
 ```
-`b=params.bulge` is the peak swell at dead-centre (0.75 default = +75%); `BULGE_R≈800px` sets how
-concentrated the ripple is (smaller = snappier, larger = wider/gentler falloff). As the camera pans a card across the frame, the card scales up riding over the
-centre and back down leaving it — "riding a ripple". **No pixel warp, no shader, no render target** — just
-`t.mesh.scale`. **Do not** replace this with a lens/post-process distortion: the user explicitly wants
-cards to stay rectangular (a fisheye-lens version was built and rejected). Applies to size only, so it
-never moves a tile or breaks the seam.
+The profile was **measured from the source** with camera zoom cancelled by pairwise differencing
+(subtract two tiles' log-size changes over the same frames — zoom drops out exactly; 1527
+constraints, 20 distance bins). The measured curve is a **GAUSSIAN DOME**, not linear and not a
+hard perspective sphere: a **flat crown** (tiles hold their peak size crossing d≈0–100, no cusp),
+steepest shrink mid-screen (~550–650px), and a **gentle tail** (≈0.56× at d≈875, still easing).
+Constants: `BULGE_SIG=579` (dome width σ), `BULGE_C0=exp(−(481/579)²)≈0.502` → bulge is exactly 1
+at the **neutral ring d=481px**. `b=params.bulge` = peak swell at dead-centre (measured **0.54**
+→ default 55%); far floor eases toward 1−b (clamped at 0.12). **No pixel warp, no shader, no
+render target** — just `t.mesh.scale`. **Do not** replace this with a lens/post-process
+distortion: the user explicitly wants cards to stay rectangular (a fisheye-lens version was built
+and rejected). Applies to size only, so it never moves a tile or breaks the seam. (History: a
+linear falloff was used before re-measurement; it overshot the peak and over-shrank edge tiles.)
 
 ### Dispersion (CPU, position)
 As tiles pass `DISP_START` (~0.72 of the half-diagonal) toward the edge they get pushed **radially

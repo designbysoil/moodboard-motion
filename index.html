@@ -115,12 +115,12 @@
       </div>
     </div>
     <div class="ctl">
-      <div class="label"><span>Speed</span><span class="val" id="spdVal">10.5s loop</span></div>
-      <input type="range" id="speed" min="6" max="30" step="0.5" value="10.5">
+      <div class="label"><span>Speed</span><span class="val" id="spdVal">15.0s loop</span></div>
+      <input type="range" id="speed" min="6" max="30" step="0.5" value="15">
     </div>
     <div class="ctl">
-      <div class="label"><span>Bulge</span><span class="val" id="blVal">28%</span></div>
-      <input type="range" id="bulge" min="0" max="150" step="1" value="28">
+      <div class="label"><span>Bulge</span><span class="val" id="blVal">55%</span></div>
+      <input type="range" id="bulge" min="0" max="150" step="1" value="55">
     </div>
     <div class="ctl">
       <div class="label"><span>Parallax</span><span class="val" id="plVal">60%</span></div>
@@ -143,8 +143,8 @@
       <input type="range" id="scale" min="60" max="200" step="1" value="119">
     </div>
     <div class="ctl">
-      <div class="label"><span>Pulse</span><span class="val" id="puVal">4%</span></div>
-      <input type="range" id="pulse" min="0" max="80" step="1" value="4">
+      <div class="label"><span>Pulse</span><span class="val" id="puVal">3%</span></div>
+      <input type="range" id="pulse" min="0" max="80" step="1" value="3">
     </div>
     <div class="ctl">
       <div class="label"><span>Text · top right</span></div>
@@ -186,12 +186,13 @@ const tray=document.getElementById('tray'), addBtn=document.getElementById('addB
 const fileInput=document.getElementById('file'), bar=document.getElementById('bar');
 const hint=document.getElementById('hint'), exportBtn=document.getElementById('export'), shuffleBtn=document.getElementById('shuffle');
 
-const params={ mode:'holds', loopSec:10.5, bulge:0.28, parallax:0.60, drift:0.45, momentum:0.60, disperse:0.55, scale:1.19, pulse:0.04,
+const params={ mode:'holds', loopSec:15, bulge:0.55, parallax:0.60, drift:0.45, momentum:0.60, disperse:0.55, scale:1.19, pulse:0.03,
                bg:'#fff', text:'', textX:960, textY:90 };
 // per-mode defaults (bulge/drift/pulse/background), applied when switching Motion — measured from the
-// reference clips: Pan is a flat parallax sweep (low drift, no bulge/pulse); Zoom is a perspective
-// dolly on black (no bulge/drift/pulse — the growth IS the motion).
-const MODE_DEFAULTS={ holds:{bulge:0.28,drift:0.45,pulse:0.04,bg:'#fff'},
+// reference clips: Holds' bulge/pulse re-measured from the source (peak swell +55%, pulse ±1.8%);
+// Pan is a flat parallax sweep (low drift, no bulge/pulse); Zoom is a perspective dolly on black
+// (no bulge/drift/pulse — the growth IS the motion).
+const MODE_DEFAULTS={ holds:{bulge:0.55,drift:0.45,pulse:0.03,bg:'#fff'},
                       pan:  {bulge:0,   drift:0.10,pulse:0,   bg:'#fff'},
                       zoom: {bulge:0,   drift:0,   pulse:0,   bg:'#000'} };
 
@@ -235,7 +236,12 @@ const PHASE=[
 ];
 // depth parallax: NEAR tiles pan more than FAR (zero at a tile's own hold so holds stay crisp).
 const DEPTH_PAR={NEAR:0.12, MID:0.0, FAR:-0.08};
-const SPHERE_R=0.79*(OUT_H/2); // ~426px: neutral ring — tiles here render at base size; inside they swell, outside they shrink. Slope matched to the source clip (linear radial falloff).
+// Bulge dome — RE-MEASURED from the source via pairwise differencing (subtracting two tiles'
+// log-size changes over the same frames cancels camera zoom exactly; 1527 constraints, 20 bins).
+// The profile is a GAUSSIAN DOME, not linear: flat crown at centre (s≈1.58 for d=0–100, no cusp),
+// steepest drop mid-range, gentle tail (s≈0.56 at d≈875). Neutral ring (s=1) at d≈481px.
+const BULGE_SIG=579;                                          // dome width σ (px), fitted
+const BULGE_C0=Math.exp(-Math.pow(481/BULGE_SIG,2));          // ≈0.502 → bulge==1 exactly at d=481
 const DISP_REF=Math.hypot(OUT_W,OUT_H)/2, DISP_START=0.72;   // dispersion: tiles past this radius (near
                                                              // the frame edge) push radially outward → spread apart as they exit
 
@@ -623,13 +629,14 @@ function animate(){
     const rx=sx-HW, ry=sy-HH, rad=Math.hypot(rx,ry)/DISP_REF;
     const disp=params.disperse*Math.max(0, rad-DISP_START);
     sx+=rx*disp; sy+=ry*disp;
-    // SPHERE bulge — each tile scales by its distance from canvas-centre, as if riding a large invisible
-    // sphere. Measured frame-by-frame from the source clip: the falloff is near-LINEAR (NOT a sharp dome
-    // or a perspective blow-up). Peak swell +b at dead-centre → base size at the neutral ring (SPHERE_R)
-    // → keeps shrinking toward the corners (floored so they stay faintly visible). Gentle + broad: a tile
-    // takes a full half-screen to drop to ~half size, so the swell reads smoothly as the camera pans.
+    // DOME bulge — each tile scales by its distance from frame-centre, riding over an invisible 3D
+    // dome. Measured from the source (zoom cancelled by pairwise differencing): a GAUSSIAN profile —
+    // a flat crown (tiles briefly HOLD their peak size crossing dead-centre, no cusp), the steepest
+    // shrink mid-screen, then a gentle tail so edge tiles never over-shrink. Peak +b at centre →
+    // exactly 1 at the neutral ring (d≈481px) → eases toward 1-b far out (floored). Pure per-tile
+    // uniform scale — NO pixel distortion.
     const dist=Math.hypot(sx-HW,sy-HH);
-    const bulge=Math.max(0.12, 1 + b*(1 - dist/SPHERE_R));
+    const bulge=Math.max(0.12, 1 + b*(Math.exp(-Math.pow(dist/BULGE_SIG,2))-BULGE_C0)/(1-BULGE_C0));
     const pulse=1+params.pulse*t.amp*Math.sin(lp*TWO_PI*t.cyc+t.ph);
     const sc=sizeMul*params.scale*pulse*bulge;
     t.mesh.scale.set(Math.max(1e-4,t.canvas.w*sc), Math.max(1e-4,t.canvas.h*sc), 1);
