@@ -5,7 +5,8 @@ A single-file, all-white minimal web tool that turns a set of uploaded images/mp
 looping 16:9 "moodboard motion" clip. Three motion modes (see "Animation modes"), each traced
 frame-by-frame from a reference clip: **Holds** (default — one big canvas, a single camera pans
 between three held framings), **Pan** (one continuous left→right parallax sweep, wrapping layers),
-and **Zoom** (perspective dolly-in with randomly spawning tiles). Depth parallax + a center-scale
+**Zoom** (perspective dolly-in with randomly spawning tiles), and **Stack** (a photo pile — full-bleed
+cards deal in one at a time, instant entrances). Depth parallax + a center-scale
 bulge add dimensionality; optional top-right typewriter text overlay; white/black background toggle.
 Exports an mp4 (or webm fallback) and previews live on canvas. The sections below describe the
 Holds source-tracing in detail; the other modes' measurements live in "Animation modes".
@@ -224,6 +225,21 @@ Each mode has its own layout builder + timeline + projection branch; the per-til
   guaranteed exit. **No momentum in this branch** (a lag would smooth the u-wrap and drag tiles
   backward at respawn). `renderOrder = K*100` (nearer on top). Zoom defaults: black bg,
   bulge/drift/pulse 0.
+
+### Stack (photo-pile card deal) — traced from the NYPL Sana AI Summit promo clip
+- Large axis-aligned **full-bleed** cards (long side ≈0.38–0.75·H rendered, centre-biased spots)
+  land one at a time on a pile; each new card renders on top (`renderOrder = dealIndex+10`); old
+  cards never move or fade. **Entrances are INSTANT** (measured: single-frame events — no slide/
+  scale/fade tween): the render loop toggles `mesh.visible` when `loopProg ≥ dealAt`. First card
+  present at the seam; the rest spread over the first ~93% of the loop (`buildStackTiles`); the
+  pile **hard-resets at the seam by design** (the reference does not loop seamlessly — same
+  accepted pattern as the typewriter text).
+- The reference's drop shadows and white-matte "speaker cards" were built and then **dropped by
+  user choice** — cards are pure edge-to-edge media, no shadow, no matte. Don't reintroduce them
+  unprompted.
+- Stack defaults: bulge/drift/pulse/disperse 0, white bg — cards are static once dealt; only
+  their video content plays. No cam, no momentum in this branch. `MODE_DEFAULTS` now carries a
+  per-mode `disperse` too.
 
 ## Background + text overlay
 - `params.bg` ('#fff'/'#000') → `renderer.setClearColor`; mode switch applies the mode's default

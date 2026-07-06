@@ -90,7 +90,7 @@
         <div class="empty" id="empty">
           <div class="plus">+</div>
           <div class="big">Drop images or mp4s</div>
-          <div class="small">or click to browse · Holds pans three compositions · Pan sweeps left→right · Zoom dollies through</div>
+          <div class="small">or click to browse · Holds pans three compositions · Pan sweeps · Zoom dollies · Stack deals a photo pile</div>
         </div>
       </div>
     </div>
@@ -105,6 +105,7 @@
         <button class="segbtn active" data-mode="holds">Holds</button>
         <button class="segbtn" data-mode="pan">Pan</button>
         <button class="segbtn" data-mode="zoom">Zoom</button>
+        <button class="segbtn" data-mode="stack">Stack</button>
       </div>
     </div>
     <div class="ctl">
@@ -188,13 +189,15 @@ const hint=document.getElementById('hint'), exportBtn=document.getElementById('e
 
 const params={ mode:'holds', loopSec:15, bulge:0.55, parallax:0.60, drift:0.45, momentum:0.60, disperse:0.55, scale:1.19, pulse:0.03,
                bg:'#fff', text:'', textX:960, textY:90 };
-// per-mode defaults (bulge/drift/pulse/background), applied when switching Motion — measured from the
-// reference clips: Holds' bulge/pulse re-measured from the source (peak swell +55%, pulse ±1.8%);
-// Pan is a flat parallax sweep (low drift, no bulge/pulse); Zoom is a perspective dolly on black
-// (no bulge/drift/pulse — the growth IS the motion).
-const MODE_DEFAULTS={ holds:{bulge:0.55,drift:0.45,pulse:0.03,bg:'#fff'},
-                      pan:  {bulge:0,   drift:0.10,pulse:0,   bg:'#fff'},
-                      zoom: {bulge:0,   drift:0,   pulse:0,   bg:'#000'} };
+// per-mode defaults (bulge/drift/pulse/disperse/background), applied when switching Motion — measured
+// from the reference clips: Holds' bulge/pulse re-measured from the source (peak swell +55%, pulse
+// ±1.8%); Pan is a flat parallax sweep (low drift, no bulge/pulse); Zoom is a perspective dolly on
+// black (no bulge/drift/pulse — the growth IS the motion); Stack is a static photo pile (cards don't
+// move once dealt — only their video content plays).
+const MODE_DEFAULTS={ holds:{bulge:0.55,drift:0.45,pulse:0.03,disperse:0.55,bg:'#fff'},
+                      pan:  {bulge:0,   drift:0.10,pulse:0,   disperse:0.55,bg:'#fff'},
+                      zoom: {bulge:0,   drift:0,   pulse:0,   disperse:0.55,bg:'#000'},
+                      stack:{bulge:0,   drift:0,   pulse:0,   disperse:0,   bg:'#fff'} };
 
 // ---- three held compositions, re-measured from the source frames (t≈0.5 / 4.6 / 11.2s) ----
 const SCENES=[
@@ -267,6 +270,15 @@ function wrapPan(v,P){ return ((v%P)+P)%P - P/2; }           // wrap a canvas-sp
 // tile is guaranteed far offscreen before it respawns.
 const ZOOM_SLOTS=14;
 const ZOOM_KBAR=1.35;                                        // mean depth; Parallax slider spreads K around it
+
+// ---- Stack mode: photo-pile card deal, traced from the NYPL Sana AI Summit reference ----
+// Large axis-aligned FULL-BLEED cards land one at a time on a pile (each new card on top, covering
+// what's beneath; old cards never move or fade). Entrances are INSTANT — measured as single-frame
+// events, no slide/scale/fade tween. The pile hard-resets at the loop seam (the reference does not
+// loop seamlessly — same accepted pattern as the typewriter text). The reference's drop shadows and
+// white-matte "speaker cards" were tried and dropped by user choice — cards are pure edge-to-edge
+// media, no shadow.
+const STACK_CAP=30;                                          // max cards on the pile
 
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
 
@@ -493,6 +505,38 @@ function buildZoomTiles(rnd){
   }
 }
 
+// ---- Stack mode: seeded deal order + placements. Sizes/positions measured from the reference
+// (long side ≈0.38–0.75 of frame height after the global Scale multiplier; centre-biased spots).
+// dealAt = loop fraction when the card pops in: first card present at the seam, the rest spread
+// over the first ~93% (≈0.7s cadence at reference speeds), final pile holds to the loop end.
+function buildStackTiles(rnd){
+  const n=Math.min(media.length, STACK_CAP);
+  const mi=media.map((_,i)=>i); for(let i=mi.length-1;i>0;i--){const j=(rnd()*(i+1))|0;[mi[i],mi[j]]=[mi[j],mi[i]];}
+  for(let k=0;k<n;k++){
+    const m=media[mi[k]];
+    const long=(0.32+rnd()*0.31)*OUT_H;                       // ×scale(1.19) → ≈0.38–0.75·H rendered
+    const r=PAN_RATIOS[(rnd()*PAN_RATIOS.length)|0];
+    const w=r>=1?long:long*r, h=r>=1?long/r:long;
+    const cx=OUT_W*(0.30+rnd()*0.40), cy=OUT_H*(0.34+rnd()*0.32);
+    const dealAt=k===0?0:Math.min(0.93, 0.03+0.90*(k-0.5*rnd())/n);
+    const base=k+10, tileAR=w/h;                              // renderOrder stacks by deal index
+    let tex; if(m.type==='vid'){ tex=new THREE.VideoTexture(m.el); tex.minFilter=THREE.LinearFilter; }
+    else { tex=new THREE.Texture(m.el); tex.minFilter=THREE.LinearFilter; tex.needsUpdate=true; }
+    const natW=m.type==='vid'?m.el.videoWidth:m.el.naturalWidth, natH=m.type==='vid'?m.el.videoHeight:m.el.naturalHeight;
+    const cropped=applyCover(tex,natW,natH,tileAR);
+    const mat=new THREE.MeshBasicMaterial({map:tex,transparent:true,opacity:1,depthTest:false,depthWrite:false});
+    const mesh=new THREE.Mesh(unitPlane,mat); mesh.renderOrder=base; scene.add(mesh);
+    tiles.push({
+      mesh, type:m.type, el:m.el, tileAR, cropped, z:base,
+      canvas:{cx, cy, w, h}, dealAt,
+      clx:0, cly:0, inertia:0.25,
+      amp:0.5+rnd()*0.5, cyc:(rnd()<0.45?1:(rnd()<0.8?2:3)), ph:rnd()*6.28318,
+      dax:8+Math.max(w,h)*0.02, day:8+Math.max(w,h)*0.02,
+      dcx:(rnd()<0.65?1:2), dcy:(rnd()<0.65?1:2), dpx:rnd()*6.28318, dpy:rnd()*6.28318
+    });
+  }
+}
+
 function rebuildScene(){
   tiles.forEach(t=>{ scene.remove(t.mesh); if(t.mesh.material.map) t.mesh.material.map.dispose(); t.mesh.material.dispose(); });
   tiles=[];
@@ -500,6 +544,7 @@ function rebuildScene(){
   const rnd=mulberry32(seed);
   if(params.mode==='pan'){ buildPanTiles(rnd); buildTimeline(); return; }
   if(params.mode==='zoom'){ buildZoomTiles(rnd); buildTimeline(); return; }
+  if(params.mode==='stack'){ buildStackTiles(rnd); buildTimeline(); return; }
   // prioritized slots: largest of each station first, interleaved -> sparse uploads still centre nicely
   const perS=[[],[],[]];
   SCENES.forEach((sc,si)=>sc.forEach(s=>perS[si].push(Object.assign({station:si},s))));
@@ -560,9 +605,10 @@ function buildTimeline(){
     tl.to({_p:0},{_p:1,duration:0.001}, L-0.001);
     return;
   }
-  if(params.mode==='zoom'){
-    // constant-speed dolly (measured: no easing) — the timeline only drives loopProg; every tile's
-    // phase wraps exactly at L, so the loop is seamless without a camera return leg.
+  if(params.mode==='zoom'||params.mode==='stack'){
+    // linear progress only. Zoom: constant-speed dolly (measured: no easing) — every tile's phase
+    // wraps exactly at L → seamless. Stack: loopProg drives the card deals (lp >= dealAt pops a
+    // card in); the pile hard-resets at the seam like the reference.
     tl=gsap.timeline({repeat:-1});
     tl.to({_p:0},{_p:1,duration:L,ease:'none'}, 0);
     return;
@@ -585,7 +631,7 @@ function animate(){
   if(tl){ const L=tl.duration()||1; loopProg=tl.time()/L; if(!recording) bar.style.width=(loopProg*100)+'%'; }
   const cx=cam.cx, cy=cam.cy, z=cam.zoom, par=params.parallax, b=params.bulge, dr=params.drift, mo=params.momentum;
   const HW=OUT_W/2, HH=OUT_H/2, TWO_PI=6.28318, lp=loopProg;
-  const isPan=params.mode==='pan', isZoom=params.mode==='zoom';
+  const isPan=params.mode==='pan', isZoom=params.mode==='zoom', isStack=params.mode==='stack';
   for(const t of tiles){
     if(t.type==='vid' && !t.cropped && t.el.videoWidth){ t.cropped=applyCover(t.mesh.material.map,t.el.videoWidth,t.el.videoHeight,t.tileAR); }
     // directional momentum: ease the tile's LAGGED camera (clx,cly) toward the real cam. fol<1 makes it
@@ -607,6 +653,12 @@ function animate(){
       const g=Math.min(40, 1/Math.max(1-Keff*u, 1e-3));
       sx=HW + t.dirx*t.d0*g + drx; sy=HH + t.diry*t.d0*g + dry;
       sizeMul=g;
+    } else if(isStack){
+      // Stack mode: the card pops in the instant loopProg passes its dealAt (measured: single-frame
+      // entrance, no tween) and then sits still — only its video content plays. No cam, no momentum.
+      t.mesh.visible = lp>=t.dealAt;
+      sx=t.canvas.cx+drx; sy=t.canvas.cy+dry;
+      sizeMul=1;
     } else if(isPan){
       // Pan mode: continuous left→right sweep, 3 depth layers at distinct constant speeds (gain).
       // Momentum still lags the pan scalar; position wraps within each layer's own period so the
@@ -651,6 +703,7 @@ const modeSeg=document.getElementById('modeSeg'), bgSeg=document.getElementById(
 const bulge=document.getElementById('bulge'), blVal=document.getElementById('blVal');
 const drift=document.getElementById('drift'), drVal=document.getElementById('drVal');
 const pulse=document.getElementById('pulse'), puVal=document.getElementById('puVal');
+const disperse=document.getElementById('disperse'), dsVal=document.getElementById('dsVal');
 function applyBg(bg){
   params.bg=bg; _textKey='';
   if(renderer) renderer.setClearColor(bg==='#000'?0x000000:0xffffff,1);
@@ -664,6 +717,7 @@ modeSeg.querySelectorAll('.segbtn').forEach(btn=>btn.onclick=()=>{
   params.bulge=d.bulge; bulge.value=Math.round(d.bulge*100); blVal.textContent=bulge.value+'%';
   params.drift=d.drift; drift.value=Math.round(d.drift*100); drVal.textContent=drift.value+'%';
   params.pulse=d.pulse; pulse.value=Math.round(d.pulse*100); puVal.textContent=pulse.value+'%';
+  params.disperse=d.disperse; disperse.value=Math.round(d.disperse*100); dsVal.textContent=disperse.value+'%';
   applyBg(d.bg);
   modeSeg.querySelectorAll('.segbtn').forEach(b=>b.classList.toggle('active', b===btn));
   rebuildScene();
@@ -677,7 +731,6 @@ textY.oninput=()=>{params.textY=+textY.value;tyVal.textContent=textY.value+'px';
 const speed=document.getElementById('speed'), spdVal=document.getElementById('spdVal');
 const parallax=document.getElementById('parallax'), plVal=document.getElementById('plVal');
 const momentum=document.getElementById('momentum'), moVal=document.getElementById('moVal');
-const disperse=document.getElementById('disperse'), dsVal=document.getElementById('dsVal');
 const scale=document.getElementById('scale'), scVal=document.getElementById('scVal');
 speed.oninput=()=>{params.loopSec=+speed.value;spdVal.textContent=(+speed.value).toFixed(1)+'s loop';buildTimeline();};
 bulge.oninput=()=>{params.bulge=+bulge.value/100;blVal.textContent=bulge.value+'%';};
