@@ -2,10 +2,13 @@
 
 ## What this is
 A single-file, all-white minimal web tool that turns a set of uploaded images/mp4s into a
-looping 16:9 "moodboard motion" clip in the style of a reference source video. The motion is **one big
-canvas** of fixed-position tiles with a **single camera that pans across it**, pausing on **three
-framings ("holds")** — the camera path was traced precisely from the source. Depth parallax + a
-center-scale bulge add dimensionality. Exports an mp4 (or webm fallback) and previews live on canvas.
+looping 16:9 "moodboard motion" clip. Three motion modes (see "Animation modes"), each traced
+frame-by-frame from a reference clip: **Holds** (default — one big canvas, a single camera pans
+between three held framings), **Pan** (one continuous left→right parallax sweep, wrapping layers),
+and **Zoom** (perspective dolly-in with randomly spawning tiles). Depth parallax + a center-scale
+bulge add dimensionality; optional top-right typewriter text overlay; white/black background toggle.
+Exports an mp4 (or webm fallback) and previews live on canvas. The sections below describe the
+Holds source-tracing in detail; the other modes' measurements live in "Animation modes".
 
 Everything lives in **one file**: `index.html` (HTML + CSS + JS inline). There is no
 build step. Open it in a browser, or serve the folder (`python3 -m http.server`) and open it.
@@ -182,6 +185,50 @@ recorded loop closes seamlessly. Preview self-converges (it loops continuously).
 | Shuffle  | `seed`         | reseeds media→slot assignment + pulse/drift params → `rebuildScene()` |
 
 Only Speed rebuilds the timeline; everything else is render-loop only (live, no rebuild).
+Plus: **Motion** (`params.mode`, segmented Holds/Pan/Zoom — switching applies `MODE_DEFAULTS` for
+bulge/drift/pulse/bg then rebuilds), **Background** (`params.bg`, White/Black, live in all modes),
+**Text / Text X / Text Y** (`params.text/textX/textY` — top-right overlay, see below).
+
+## Animation modes (Motion segmented control)
+`params.mode` selects one of three motion grammars; Holds is the original and the default.
+Each mode has its own layout builder + timeline + projection branch; the per-tile pipeline
+(drift → dispersion → bulge → pulse → scale) is shared.
+
+### Pan (left→right parallax sweep) — traced from a MASP signage mockup clip
+- ONE continuous eased sweep per loop, **no holds**: `cam.cx` 0→`PAN_TRAVEL` (=2.6 screen-widths,
+  measured) via `sweepEase` (integral of a Gaussian velocity bell σ≈0.195 — zero velocity at both
+  ends; measured progress 6%/48%/94% at p=.25/.5/.75). `cam.zoom=1`, no vertical motion.
+- **3 constant-gain parallax layers** (measured R²>0.99 linear): `gain=1+PAN_GAIN[tier]*parallax`
+  → 1.09/0.91/0.65 at the default parallax 0.60. Tiles wrap modulo their layer period
+  `P=gain*PAN_TRAVEL` (`wrapPan`) — displacement over one loop = exactly P → **seamless**.
+  `PAN_GAIN_MIN=0.45` floors the gain so P always exceeds screen+tile width (wrap jumps stay
+  offscreen at any Parallax setting). Layout: `buildPanTiles` — procedural seeded slots, 8 per
+  tier, 4:5-dominant `PAN_RATIOS`. Momentum applies to the pan scalar (`clx`).
+
+### Zoom (parallax dolly-in, random spawns) — traced from the Sana AI Summit promo clip
+- Camera flies forward at **constant speed** (timeline is just a linear progress tween; measured:
+  no easing). Per tile: `u=(loopProg+phase)%1`, growth `g=1/(1−K·u)` — the measured TRUE
+  PERSPECTIVE law (fits rmse<1.6px; exponential fits worse). Size AND radial offset from
+  frame-centre both scale by g; per-tile `K` (depth) spread = the parallax (Parallax slider
+  spreads K around `ZOOM_KBAR=1.35`, clamped ≥1.02).
+- Tiles **pop in instantly** (no fade/scale-in — measured) small (long 75–140px) on a seeded
+  spawn ring (`d0` 170–430px from centre, floored vs tile size so a tile can never engulf the
+  camera), fly outward, exit, stay offscreen (g clamped at 40) until their phase wraps →
+  **exactly periodic, seamless**. K≥1.02 keeps the perspective singularity inside the loop =
+  guaranteed exit. **No momentum in this branch** (a lag would smooth the u-wrap and drag tiles
+  backward at respawn). `renderOrder = K*100` (nearer on top). Zoom defaults: black bg,
+  bulge/drift/pulse 0.
+
+## Background + text overlay
+- `params.bg` ('#fff'/'#000') → `renderer.setClearColor`; mode switch applies the mode's default
+  (`MODE_DEFAULTS[mode].bg` — zoom is black like its reference), user can override live.
+- Top-right **text overlay** (`initText/drawText/updateText`): drawn into a `THREE.CanvasTexture`
+  plane (`renderOrder:1000`) so it is captured by export (an HTML overlay would NOT be). Left-aligned
+  block; `textX` = inset from the RIGHT edge to the block's left edge, `textY` = inset from top.
+  **Typewriter per loop**: ~14 chars/s starting 1s in, blinking block cursor ~1Hz; restarts each
+  loop (intentional — a type-on cannot also persist across a seamless loop; the reference reads the
+  same way). Text color auto-flips with bg (white on black / ink on white). Empty textarea hides it.
+  Texture redraws only when char-count/blink/content/bg change (`_textKey`).
 
 ## Media handling
 - Images become `THREE.Texture(img)`; mp4s become `THREE.VideoTexture(video)` (muted/loop/autoplay,

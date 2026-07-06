@@ -46,6 +46,14 @@
   .ctl .label{display:flex;justify-content:space-between;align-items:baseline;font-size:10px;letter-spacing:.18em;
     text-transform:uppercase;color:var(--muted);margin-bottom:8px}
   .ctl .val{color:var(--ink);font-variant-numeric:tabular-nums}
+  .seg{display:flex;border:1px solid var(--ink)}
+  .segbtn{flex:1;padding:9px;border:none;background:none;color:var(--ink);font-family:var(--mono);
+    font-size:10px;letter-spacing:.14em;text-transform:uppercase;cursor:pointer;transition:.15s}
+  .segbtn+.segbtn{border-left:1px solid var(--ink)}
+  .segbtn.active{background:var(--ink);color:#fff}
+  textarea{width:100%;border:1px solid var(--line-strong);background:none;color:var(--ink);
+    font-family:var(--mono);font-size:11px;line-height:1.5;padding:8px;resize:vertical;min-height:64px}
+  textarea:focus{outline:none;border-color:var(--ink)}
   input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:1px;background:var(--line-strong);
     margin:12px 0 0;cursor:pointer}
   input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:11px;height:11px;border-radius:50%;
@@ -82,7 +90,7 @@
         <div class="empty" id="empty">
           <div class="plus">+</div>
           <div class="big">Drop images or mp4s</div>
-          <div class="small">or click to browse · the camera pans across three held compositions</div>
+          <div class="small">or click to browse · Holds pans three compositions · Pan sweeps left→right · Zoom dollies through</div>
         </div>
       </div>
     </div>
@@ -91,6 +99,21 @@
   </section>
 
   <aside>
+    <div class="ctl">
+      <div class="label"><span>Motion</span></div>
+      <div class="seg" id="modeSeg">
+        <button class="segbtn active" data-mode="holds">Holds</button>
+        <button class="segbtn" data-mode="pan">Pan</button>
+        <button class="segbtn" data-mode="zoom">Zoom</button>
+      </div>
+    </div>
+    <div class="ctl">
+      <div class="label"><span>Background</span></div>
+      <div class="seg" id="bgSeg">
+        <button class="segbtn active" data-bg="#fff">White</button>
+        <button class="segbtn" data-bg="#000">Black</button>
+      </div>
+    </div>
     <div class="ctl">
       <div class="label"><span>Speed</span><span class="val" id="spdVal">10.5s loop</span></div>
       <input type="range" id="speed" min="6" max="30" step="0.5" value="10.5">
@@ -123,6 +146,18 @@
       <div class="label"><span>Pulse</span><span class="val" id="puVal">4%</span></div>
       <input type="range" id="pulse" min="0" max="80" step="1" value="4">
     </div>
+    <div class="ctl">
+      <div class="label"><span>Text · top right</span></div>
+      <textarea id="textIn" rows="4" placeholder="Optional overlay text — types on each loop"></textarea>
+    </div>
+    <div class="ctl">
+      <div class="label"><span>Text X</span><span class="val" id="txVal">960px</span></div>
+      <input type="range" id="textX" min="0" max="1400" step="10" value="960">
+    </div>
+    <div class="ctl">
+      <div class="label"><span>Text Y</span><span class="val" id="tyVal">90px</span></div>
+      <input type="range" id="textY" min="0" max="800" step="10" value="90">
+    </div>
     <div class="actions">
       <button class="line" id="shuffle">Shuffle layout</button>
       <button class="solid" id="export" disabled>Export mp4</button>
@@ -151,7 +186,14 @@ const tray=document.getElementById('tray'), addBtn=document.getElementById('addB
 const fileInput=document.getElementById('file'), bar=document.getElementById('bar');
 const hint=document.getElementById('hint'), exportBtn=document.getElementById('export'), shuffleBtn=document.getElementById('shuffle');
 
-const params={ loopSec:10.5, bulge:0.28, parallax:0.60, drift:0.45, momentum:0.60, disperse:0.55, scale:1.19, pulse:0.04 };
+const params={ mode:'holds', loopSec:10.5, bulge:0.28, parallax:0.60, drift:0.45, momentum:0.60, disperse:0.55, scale:1.19, pulse:0.04,
+               bg:'#fff', text:'', textX:960, textY:90 };
+// per-mode defaults (bulge/drift/pulse/background), applied when switching Motion — measured from the
+// reference clips: Pan is a flat parallax sweep (low drift, no bulge/pulse); Zoom is a perspective
+// dolly on black (no bulge/drift/pulse — the growth IS the motion).
+const MODE_DEFAULTS={ holds:{bulge:0.28,drift:0.45,pulse:0.04,bg:'#fff'},
+                      pan:  {bulge:0,   drift:0.10,pulse:0,   bg:'#fff'},
+                      zoom: {bulge:0,   drift:0,   pulse:0,   bg:'#000'} };
 
 // ---- three held compositions, re-measured from the source frames (t≈0.5 / 4.6 / 11.2s) ----
 const SCENES=[
@@ -197,6 +239,29 @@ const SPHERE_R=0.79*(OUT_H/2); // ~426px: neutral ring — tiles here render at 
 const DISP_REF=Math.hypot(OUT_W,OUT_H)/2, DISP_START=0.72;   // dispersion: tiles past this radius (near
                                                              // the frame edge) push radially outward → spread apart as they exit
 
+// ---- Pan mode: continuous left→right parallax sweep, traced from a signage reference clip ----
+// One flat sweep per loop (no holds): 3 depth layers move at constant, distinct speeds (gain = tile
+// px-travel / camera px-travel, measured R²>0.99 linear). Each layer's content wraps (period = its own
+// gain × PAN_TRAVEL), which is exactly what makes the loop seamless.
+const PAN_TRAVEL=2.6*OUT_W;                                  // total camera sweep per loop (measured ≈2.6 screen-widths)
+const PAN_GAIN={NEAR:0.15, MID:-0.15, FAR:-0.58};             // per-tier gain spread at parallax=1.0 —
+                                                              // gain=1+PAN_GAIN[d]*parallax; at the default
+                                                              // parallax (0.60) gives 1.09/0.91/0.65, matching
+                                                              // the measured source layer speeds.
+const PAN_GAIN_MIN=0.45;                                     // floor so a layer's wrap period always exceeds
+                                                              // screen+tile width — wrap jumps stay offscreen
+function wrapPan(v,P){ return ((v%P)+P)%P - P/2; }           // wrap a canvas-space x into [-P/2, P/2)
+
+// ---- Zoom mode: parallax dolly-in with random spawns, traced from the Sana AI Summit reference ----
+// A camera flies forward at constant speed through tiles scattered in 3D depth. Measured: both tile
+// size and radial offset from frame-centre grow by the TRUE PERSPECTIVE law g(u)=1/(1-K·u) (per-tile
+// K = depth; near tiles grow/fly faster — that's the parallax). Tiles POP IN instantly (no fade, no
+// scale-from-zero) small at seeded-random spots, fly outward, exit the frame, and stay offscreen until
+// their phase wraps → exactly periodic, seamless. K is kept >1 (singularity inside the loop) so every
+// tile is guaranteed far offscreen before it respawns.
+const ZOOM_SLOTS=14;
+const ZOOM_KBAR=1.35;                                        // mean depth; Parallax slider spreads K around it
+
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
 
 // source-matched ease: integral of a skewed velocity bell v(p)=p^3*(1-p)^2 (peak ~0.6)
@@ -215,6 +280,13 @@ const _ptot=_pcum[_PN];
 function panEase(p){ if(p<=0)return 0; if(p>=1)return 1; const x=p*_PN,i=Math.floor(x),f=x-i;
   return (_pcum[i]+(_pcum[Math.min(i+1,_PN)]-_pcum[i])*f)/_ptot; }
 
+// Pan-mode ease: symmetric Gaussian velocity bell v(p)=exp(-((p-0.5)/0.195)^2) — gentle start/end,
+// fast middle, zero velocity at both ends (fit to the reference clip's measured pan profile: σ≈0.195).
+const _SN=240, _scum=[0]; (function(){let a=0;for(let i=1;i<=_SN;i++){const p=i/_SN;a+=Math.exp(-Math.pow((p-0.5)/0.195,2));_scum.push(a);}})();
+const _stot=_scum[_SN];
+function sweepEase(p){ if(p<=0)return 0; if(p>=1)return 1; const x=p*_SN,i=Math.floor(x),f=x-i;
+  return (_scum[i]+(_scum[Math.min(i+1,_SN)]-_scum[i])*f)/_stot; }
+
 // ---------------- three.js setup ----------------
 let renderer,scene,camera,unitPlane,tiles=[],tl=null,seed=(Math.random()*1e9)|0,recording=false,loopProg=0;
 const cam={cx:HOLDS[0].lookAt[0], cy:HOLDS[0].lookAt[1], zoom:HOLDS[0].zoom};   // animated camera
@@ -227,7 +299,56 @@ function initGL(){
   camera=new THREE.OrthographicCamera(0,OUT_W,OUT_H,0,1,4000);  // y-up: top=OUT_H, bottom=0
   camera.position.z=1000;
   unitPlane=new THREE.PlaneGeometry(1,1);
+  initText();
   animate();
+}
+
+// ---------------- text overlay (top-right, typewriter per loop) ----------------
+// Drawn into a CanvasTexture on a fixed screen-space plane (renderOrder 1000) so it survives export
+// (MediaRecorder captures the WebGL canvas — an HTML overlay would NOT be recorded). Types on at
+// ~14 chars/s starting ~1s into each loop with a blinking block cursor, exactly like the reference;
+// on loop restart it clears and retypes (a type-on can't also persist across a seamless loop — the
+// reference behaves the same way when looped). textX = inset from the RIGHT edge to the block's left
+// edge; textY = inset from the top.
+const TEXT_CW=832, TEXT_CH=576, TEXT_FONT='34px "Helvetica Neue",Helvetica,Arial,sans-serif', TEXT_LH=46;
+let textMesh=null, textCtx=null, textTex=null, _textKey='';
+function initText(){
+  const c=document.createElement('canvas'); c.width=TEXT_CW; c.height=TEXT_CH;
+  textCtx=c.getContext('2d');
+  textTex=new THREE.CanvasTexture(c); textTex.minFilter=THREE.LinearFilter;
+  const mat=new THREE.MeshBasicMaterial({map:textTex,transparent:true,depthTest:false,depthWrite:false});
+  textMesh=new THREE.Mesh(unitPlane,mat); textMesh.renderOrder=1000; textMesh.visible=false;
+  textMesh.scale.set(TEXT_CW,TEXT_CH,1); scene.add(textMesh);
+}
+function drawText(chars,cursorOn){
+  const c=textCtx; c.clearRect(0,0,TEXT_CW,TEXT_CH);
+  c.font=TEXT_FONT; c.textBaseline='top';
+  c.fillStyle=(params.bg==='#000')?'#fff':'#111';
+  const lines=params.text.split('\n');
+  let used=0, curX=0, curY=0;
+  for(let li=0;li<lines.length;li++){
+    const seg=lines[li].slice(0, Math.max(0, chars-used));
+    if(seg) c.fillText(seg, 0, li*TEXT_LH);
+    curX=c.measureText(seg).width; curY=li*TEXT_LH;
+    used+=lines[li].length;
+    if(used>=chars) break;
+  }
+  if(cursorOn) c.fillRect(curX+6, curY+3, 5, 32);
+  textTex.needsUpdate=true;
+}
+function updateText(){
+  if(!textMesh) return;
+  const has=params.text.trim().length>0;
+  textMesh.visible=has;
+  if(!has) return;
+  const L=tl?tl.duration():params.loopSec;
+  const total=params.text.replace(/\n/g,'').length;
+  const chars=Math.max(0, Math.min(total, Math.floor((loopProg*L-1.0)*14)));
+  const blink=(Math.floor(loopProg*L*2)%2)===0;
+  const key=chars+'|'+blink+'|'+params.bg+'|'+params.text;
+  if(key!==_textKey){ _textKey=key; drawText(chars,blink); }
+  const cxp=OUT_W-params.textX+TEXT_CW/2, cyp=params.textY+TEXT_CH/2;   // block left at OUT_W-textX
+  textMesh.position.set(cxp, OUT_H-cyp, 0);
 }
 
 // ---------------- media ----------------
@@ -280,11 +401,99 @@ function applyCover(tex,natW,natH,tileAR){
 }
 
 // ---------------- build scene (unique media -> prioritized slots) ----------------
+// ---- Pan mode: procedural 3-layer slot generation (NEAR/MID/FAR), same unique-media / largest-first
+// interleaved priority pattern as the Holds SCENES, but positions are generated across each layer's
+// wrap period instead of read from a traced composition.
+const PAN_LAYERS=[
+  {tier:'NEAR', count:8, longMin:300, longMax:500, cyMin:0.30, cyMax:0.70},
+  {tier:'MID',  count:8, longMin:200, longMax:300, cyMin:0.12, cyMax:0.88},
+  {tier:'FAR',  count:8, longMin:110, longMax:220, cyMin:0.12, cyMax:0.88},
+];
+const PAN_RATIOS=[0.80,0.80,0.80,1.00,1.50,1.78]; // 4:5-dominant crop palette (matches SCENES mix)
+
+function buildPanTiles(rnd){
+  const n=media.length;
+  const perL=PAN_LAYERS.map(layer=>{
+    const gain0=1+PAN_GAIN[layer.tier]*0.60, P0=gain0*PAN_TRAVEL;   // default-parallax period, for spacing only
+    const arr=[];
+    for(let i=0;i<layer.count;i++){
+      const long=layer.longMin+rnd()*(layer.longMax-layer.longMin);
+      const r=PAN_RATIOS[(rnd()*PAN_RATIOS.length)|0];
+      const w=r>=1?long:long*r, h=r>=1?long/r:long;
+      const cx=((i+0.5+(rnd()-0.5)*0.7)/layer.count)*P0 - P0/2;     // evenly spaced + jitter, centred on 0
+      const cy=(layer.cyMin+rnd()*(layer.cyMax-layer.cyMin))*OUT_H;
+      arr.push({d:layer.tier, w, h, cx, cy, long});
+    }
+    arr.sort((a,b)=>b.long-a.long);
+    return arr;
+  });
+  const priority=[]; for(let i=0,more=true;more;i++){ more=false; for(let l=0;l<perL.length;l++){ if(i<perL[l].length){priority.push(perL[l][i]);more=true;} } }
+  const mi=media.map((_,i)=>i); for(let i=mi.length-1;i>0;i--){const j=(rnd()*(i+1))|0;[mi[i],mi[j]]=[mi[j],mi[i]];}
+  const count=Math.min(n,priority.length);
+  for(let k=0;k<count;k++){
+    const s=priority[k], m=media[mi[k]], tileAR=s.w/s.h, z=DEPTHZ[s.d];
+    let tex; if(m.type==='vid'){ tex=new THREE.VideoTexture(m.el); tex.minFilter=THREE.LinearFilter; }
+    else { tex=new THREE.Texture(m.el); tex.minFilter=THREE.LinearFilter; tex.needsUpdate=true; }
+    const natW=m.type==='vid'?m.el.videoWidth:m.el.naturalWidth, natH=m.type==='vid'?m.el.videoHeight:m.el.naturalHeight;
+    const cropped=applyCover(tex,natW,natH,tileAR);
+    const mat=new THREE.MeshBasicMaterial({map:tex,transparent:true,opacity:1,depthTest:false,depthWrite:false});
+    const mesh=new THREE.Mesh(unitPlane,mat); mesh.renderOrder=z; scene.add(mesh);
+    tiles.push({
+      mesh, type:m.type, el:m.el, tileAR, cropped, z,
+      canvas:{cx:s.cx, cy:s.cy, w:s.w, h:s.h}, gainTier:s.d,
+      clx:0, cly:0, inertia:Math.min(1.3,Math.max(0.25,Math.max(s.w,s.h)/1100)),
+      amp:0.5+rnd()*0.5, cyc:(rnd()<0.45?1:(rnd()<0.8?2:3)), ph:rnd()*6.28318,
+      dax:14+Math.max(s.w,s.h)*(0.018+rnd()*0.014), day:14+Math.max(s.w,s.h)*(0.018+rnd()*0.014),
+      dcx:(rnd()<0.65?1:2), dcy:(rnd()<0.65?1:2), dpx:rnd()*6.28318, dpy:rnd()*6.28318
+    });
+  }
+}
+
+// ---- Zoom mode: procedural slots — staggered spawn phase + depth K + spawn ring around centre.
+// Spawn sizes/distances scaled from the reference (long side ≈7–13% of frame height; spawn ring
+// ≈0.15–0.4 of the half-diagonal). d0 is floored vs tile size so a tile can never engulf the camera
+// (it must always exit past the frame edge before its phase wraps).
+function buildZoomTiles(rnd){
+  const n=media.length, slots=[];
+  for(let i=0;i<ZOOM_SLOTS;i++){
+    const long=75+rnd()*65;
+    const r=PAN_RATIOS[(rnd()*PAN_RATIOS.length)|0];
+    const w=r>=1?long:long*r, h=r>=1?long/r:long;
+    const th=rnd()*6.28318;
+    const d0=Math.max(170+rnd()*260, 0.75*Math.max(w,h)+60);
+    slots.push({ phase:(i+0.35*rnd())/ZOOM_SLOTS, K:1.05+rnd()*0.60,
+                 dirx:Math.cos(th), diry:Math.sin(th), d0, w, h, long });
+  }
+  slots.sort((a,b)=>b.long-a.long);
+  const mi=media.map((_,i)=>i); for(let i=mi.length-1;i>0;i--){const j=(rnd()*(i+1))|0;[mi[i],mi[j]]=[mi[j],mi[i]];}
+  const count=Math.min(n,slots.length);
+  for(let k=0;k<count;k++){
+    const s=slots[k], m=media[mi[k]], tileAR=s.w/s.h, z=Math.round(s.K*100);  // nearer (bigger K) on top
+    let tex; if(m.type==='vid'){ tex=new THREE.VideoTexture(m.el); tex.minFilter=THREE.LinearFilter; }
+    else { tex=new THREE.Texture(m.el); tex.minFilter=THREE.LinearFilter; tex.needsUpdate=true; }
+    const natW=m.type==='vid'?m.el.videoWidth:m.el.naturalWidth, natH=m.type==='vid'?m.el.videoHeight:m.el.naturalHeight;
+    const cropped=applyCover(tex,natW,natH,tileAR);
+    const mat=new THREE.MeshBasicMaterial({map:tex,transparent:true,opacity:1,depthTest:false,depthWrite:false});
+    const mesh=new THREE.Mesh(unitPlane,mat); mesh.renderOrder=z; scene.add(mesh);
+    tiles.push({
+      mesh, type:m.type, el:m.el, tileAR, cropped, z,
+      canvas:{cx:0, cy:0, w:s.w, h:s.h},          // w/h = spawn size; position comes from dir·d0·g
+      phase:s.phase, K:s.K, dirx:s.dirx, diry:s.diry, d0:s.d0,
+      clx:0, cly:0, inertia:0.25,                  // unused in zoom (no momentum on the dolly)
+      amp:0.5+rnd()*0.5, cyc:(rnd()<0.45?1:(rnd()<0.8?2:3)), ph:rnd()*6.28318,
+      dax:8+Math.max(s.w,s.h)*0.02, day:8+Math.max(s.w,s.h)*0.02,
+      dcx:(rnd()<0.65?1:2), dcy:(rnd()<0.65?1:2), dpx:rnd()*6.28318, dpy:rnd()*6.28318
+    });
+  }
+}
+
 function rebuildScene(){
   tiles.forEach(t=>{ scene.remove(t.mesh); if(t.mesh.material.map) t.mesh.material.map.dispose(); t.mesh.material.dispose(); });
   tiles=[];
   const n=media.length; if(!n){ buildTimeline(); return; }
   const rnd=mulberry32(seed);
+  if(params.mode==='pan'){ buildPanTiles(rnd); buildTimeline(); return; }
+  if(params.mode==='zoom'){ buildZoomTiles(rnd); buildTimeline(); return; }
   // prioritized slots: largest of each station first, interleaved -> sparse uploads still centre nicely
   const perS=[[],[],[]];
   SCENES.forEach((sc,si)=>sc.forEach(s=>perS[si].push(Object.assign({station:si},s))));
@@ -337,7 +546,22 @@ function rebuildScene(){
 function buildTimeline(){
   if(tl){ tl.kill(); tl=null; }
   if(!tiles.length) return;
-  const L=params.loopSec, A=HOLDS[0];
+  const L=params.loopSec;
+  if(params.mode==='pan'){
+    cam.cx=0; cam.cy=OUT_H/2; cam.zoom=1;
+    tl=gsap.timeline({repeat:-1});
+    tl.to(cam,{cx:PAN_TRAVEL, duration:L, ease:sweepEase}, 0);
+    tl.to({_p:0},{_p:1,duration:0.001}, L-0.001);
+    return;
+  }
+  if(params.mode==='zoom'){
+    // constant-speed dolly (measured: no easing) — the timeline only drives loopProg; every tile's
+    // phase wraps exactly at L, so the loop is seamless without a camera return leg.
+    tl=gsap.timeline({repeat:-1});
+    tl.to({_p:0},{_p:1,duration:L,ease:'none'}, 0);
+    return;
+  }
+  const A=HOLDS[0];
   cam.cx=A.lookAt[0]; cam.cy=A.lookAt[1]; cam.zoom=A.zoom;   // start framed on home
   tl=gsap.timeline({repeat:-1});
   for(let i=1;i<PHASE.length;i++){
@@ -355,6 +579,7 @@ function animate(){
   if(tl){ const L=tl.duration()||1; loopProg=tl.time()/L; if(!recording) bar.style.width=(loopProg*100)+'%'; }
   const cx=cam.cx, cy=cam.cy, z=cam.zoom, par=params.parallax, b=params.bulge, dr=params.drift, mo=params.momentum;
   const HW=OUT_W/2, HH=OUT_H/2, TWO_PI=6.28318, lp=loopProg;
+  const isPan=params.mode==='pan', isZoom=params.mode==='zoom';
   for(const t of tiles){
     if(t.type==='vid' && !t.cropped && t.el.videoWidth){ t.cropped=applyCover(t.mesh.material.map,t.el.videoWidth,t.el.videoHeight,t.tileAR); }
     // directional momentum: ease the tile's LAGGED camera (clx,cly) toward the real cam. fol<1 makes it
@@ -363,15 +588,36 @@ function animate(){
     // span a good chunk of the hold (the carry-through), instead of snapping settled in a few frames.
     // fol=1 (momentum 0) == exact follow, no lag.
     const fol=Math.max(0.03,Math.pow(1-mo*0.85, 1+t.inertia*1.6));
-    t.clx+=(cx-t.clx)*fol; t.cly+=(cy-t.cly)*fol;
     // per-tile micro-drift (canvas space) — a small ellipse, always on, so holds never feel frozen
     const drx=dr*t.dax*Math.sin(lp*TWO_PI*t.dcx+t.dpx), dry=dr*t.day*Math.cos(lp*TWO_PI*t.dcy+t.dpy);
-    // project canvas → screen (image coords). Depth parallax: offset grows as the camera leaves this
-    // tile's own hold (so each composition is parallax-free, i.e. crisp, at its own hold). The base
-    // camera subtraction uses the LAGGED camera (momentum); parallax still keys off the true cam so the
-    // composition resolves crisp at its own hold once the lag has settled.
-    const pdx=(t.homeLookAt[0]-cx)*t.par*par, pdy=(t.homeLookAt[1]-cy)*t.par*par;
-    let sx=(t.canvas.cx+drx-t.clx+pdx)*z+HW, sy=(t.canvas.cy+dry-t.cly+pdy)*z+HH;
+    let sx, sy, sizeMul=z;
+    if(isZoom){
+      // Zoom mode: perspective dolly. Size and radial offset from centre both grow by g=1/(1-K·u)
+      // (the measured true-perspective law). u wraps per tile phase; K stays >1 (singularity inside
+      // the loop) so the tile is guaranteed far offscreen before it pops back in at its spawn spot.
+      // NO momentum here — a lagged scalar would smooth the wrap and drag the tile backward on respawn.
+      const u=(lp+t.phase)%1;
+      const Keff=Math.min(1.9, Math.max(1.02, ZOOM_KBAR+(t.K-ZOOM_KBAR)*par));
+      const g=Math.min(40, 1/Math.max(1-Keff*u, 1e-3));
+      sx=HW + t.dirx*t.d0*g + drx; sy=HH + t.diry*t.d0*g + dry;
+      sizeMul=g;
+    } else if(isPan){
+      // Pan mode: continuous left→right sweep, 3 depth layers at distinct constant speeds (gain).
+      // Momentum still lags the pan scalar; position wraps within each layer's own period so the
+      // sweep (period == PAN_TRAVEL) and every layer's wrap close together — seamless loop.
+      t.clx+=(cx-t.clx)*fol;
+      const gain=Math.min(2, Math.max(PAN_GAIN_MIN, 1+PAN_GAIN[t.gainTier]*par));
+      sx=HW+wrapPan(t.canvas.cx+drx-gain*t.clx, gain*PAN_TRAVEL);
+      sy=t.canvas.cy+dry;
+    } else {
+      t.clx+=(cx-t.clx)*fol; t.cly+=(cy-t.cly)*fol;
+      // project canvas → screen (image coords). Depth parallax: offset grows as the camera leaves this
+      // tile's own hold (so each composition is parallax-free, i.e. crisp, at its own hold). The base
+      // camera subtraction uses the LAGGED camera (momentum); parallax still keys off the true cam so the
+      // composition resolves crisp at its own hold once the lag has settled.
+      const pdx=(t.homeLookAt[0]-cx)*t.par*par, pdy=(t.homeLookAt[1]-cy)*t.par*par;
+      sx=(t.canvas.cx+drx-t.clx+pdx)*z+HW; sy=(t.canvas.cy+dry-t.cly+pdy)*z+HH;
+    }
     // dispersion — push tiles radially outward once they pass DISP_START toward the edge, so they
     // spread apart (not move in lockstep) as they exit the frame. Zero inside → held comps stay tight.
     const rx=sx-HW, ry=sy-HH, rad=Math.hypot(rx,ry)/DISP_REF;
@@ -385,22 +631,47 @@ function animate(){
     const dist=Math.hypot(sx-HW,sy-HH);
     const bulge=Math.max(0.12, 1 + b*(1 - dist/SPHERE_R));
     const pulse=1+params.pulse*t.amp*Math.sin(lp*TWO_PI*t.cyc+t.ph);
-    const sc=z*params.scale*pulse*bulge;
+    const sc=sizeMul*params.scale*pulse*bulge;
     t.mesh.scale.set(Math.max(1e-4,t.canvas.w*sc), Math.max(1e-4,t.canvas.h*sc), 1);
     t.mesh.position.set(sx, OUT_H-sy, 0);     // image-y (down) → world y-up
   }
+  updateText();
   if(renderer) renderer.render(scene,camera);
 }
 
 // ---------------- controls ----------------
-const speed=document.getElementById('speed'), spdVal=document.getElementById('spdVal');
+const modeSeg=document.getElementById('modeSeg'), bgSeg=document.getElementById('bgSeg');
 const bulge=document.getElementById('bulge'), blVal=document.getElementById('blVal');
-const parallax=document.getElementById('parallax'), plVal=document.getElementById('plVal');
 const drift=document.getElementById('drift'), drVal=document.getElementById('drVal');
+const pulse=document.getElementById('pulse'), puVal=document.getElementById('puVal');
+function applyBg(bg){
+  params.bg=bg; _textKey='';
+  if(renderer) renderer.setClearColor(bg==='#000'?0x000000:0xffffff,1);
+  bgSeg.querySelectorAll('.segbtn').forEach(b=>b.classList.toggle('active', b.dataset.bg===bg));
+}
+bgSeg.querySelectorAll('.segbtn').forEach(btn=>btn.onclick=()=>applyBg(btn.dataset.bg));
+modeSeg.querySelectorAll('.segbtn').forEach(btn=>btn.onclick=()=>{
+  const m=btn.dataset.mode; if(m===params.mode) return;
+  params.mode=m;
+  const d=MODE_DEFAULTS[m];
+  params.bulge=d.bulge; bulge.value=Math.round(d.bulge*100); blVal.textContent=bulge.value+'%';
+  params.drift=d.drift; drift.value=Math.round(d.drift*100); drVal.textContent=drift.value+'%';
+  params.pulse=d.pulse; pulse.value=Math.round(d.pulse*100); puVal.textContent=pulse.value+'%';
+  applyBg(d.bg);
+  modeSeg.querySelectorAll('.segbtn').forEach(b=>b.classList.toggle('active', b===btn));
+  rebuildScene();
+});
+const textIn=document.getElementById('textIn');
+const textX=document.getElementById('textX'), txVal=document.getElementById('txVal');
+const textY=document.getElementById('textY'), tyVal=document.getElementById('tyVal');
+textIn.oninput=()=>{params.text=textIn.value;_textKey='';};
+textX.oninput=()=>{params.textX=+textX.value;txVal.textContent=textX.value+'px';};
+textY.oninput=()=>{params.textY=+textY.value;tyVal.textContent=textY.value+'px';};
+const speed=document.getElementById('speed'), spdVal=document.getElementById('spdVal');
+const parallax=document.getElementById('parallax'), plVal=document.getElementById('plVal');
 const momentum=document.getElementById('momentum'), moVal=document.getElementById('moVal');
 const disperse=document.getElementById('disperse'), dsVal=document.getElementById('dsVal');
 const scale=document.getElementById('scale'), scVal=document.getElementById('scVal');
-const pulse=document.getElementById('pulse'), puVal=document.getElementById('puVal');
 speed.oninput=()=>{params.loopSec=+speed.value;spdVal.textContent=(+speed.value).toFixed(1)+'s loop';buildTimeline();};
 bulge.oninput=()=>{params.bulge=+bulge.value/100;blVal.textContent=bulge.value+'%';};
 parallax.oninput=()=>{params.parallax=+parallax.value/100;plVal.textContent=parallax.value+'%';};
@@ -436,7 +707,7 @@ exportBtn.onclick=()=>{
     const L=tl.duration(), steps=Math.max(1,Math.round(L*60));
     for(let pass=0;pass<2;pass++) for(let i=0;i<steps;i++){
       tl.time((i/steps)*L);
-      for(const t of tiles){ const fol=Math.max(0.05,Math.min(1,1-params.momentum*0.95*t.inertia));
+      for(const t of tiles){ const fol=Math.max(0.03,Math.pow(1-params.momentum*0.85, 1+t.inertia*1.6));
         t.clx+=(cam.cx-t.clx)*fol; t.cly+=(cam.cy-t.cly)*fol; }
     }
   })();
