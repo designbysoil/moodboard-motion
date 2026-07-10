@@ -192,8 +192,8 @@ const params={ mode:'holds', loopSec:15, bulge:0.55, parallax:0.60, drift:0.45, 
 // per-mode defaults (bulge/drift/pulse/disperse/background), applied when switching Motion — measured
 // from the reference clips: Holds' bulge/pulse re-measured from the source (peak swell +55%, pulse
 // ±1.8%); Pan is a flat parallax sweep (low drift, no bulge/pulse); Zoom is a perspective dolly on
-// black (no bulge/drift/pulse — the growth IS the motion); Stack is a static photo pile (cards don't
-// move once dealt — only their video content plays).
+// black (no bulge/drift/pulse — the growth IS the motion); Stack is a scene-based collage (cards
+// never move on their own — the shared slow collage zoom + their video content are the only motion).
 const MODE_DEFAULTS={ holds:{bulge:0.55,drift:0.45,pulse:0.03,disperse:0.55,bg:'#fff'},
                       pan:  {bulge:0,   drift:0.10,pulse:0,   disperse:0.55,bg:'#fff'},
                       zoom: {bulge:0,   drift:0,   pulse:0,   disperse:0.55,bg:'#000'},
@@ -271,14 +271,21 @@ function wrapPan(v,P){ return ((v%P)+P)%P - P/2; }           // wrap a canvas-sp
 const ZOOM_SLOTS=14;
 const ZOOM_KBAR=1.35;                                        // mean depth; Parallax slider spreads K around it
 
-// ---- Stack mode: photo-pile card deal, traced from the NYPL Sana AI Summit reference ----
-// Large axis-aligned FULL-BLEED cards land one at a time on a pile (each new card on top, covering
-// what's beneath; old cards never move or fade). Entrances are INSTANT — measured as single-frame
-// events, no slide/scale/fade tween. The pile hard-resets at the loop seam (the reference does not
-// loop seamlessly — same accepted pattern as the typewriter text). The reference's drop shadows and
-// white-matte "speaker cards" were tried and dropped by user choice — cards are pure edge-to-edge
-// media, no shadow.
-const STACK_CAP=30;                                          // max cards on the pile
+// ---- Stack mode: scene-based collage, traced from the NYPL Sana AI Summit reference ----
+// NOT a monotonic pile: the reference (re-measured frame-by-frame) plays as ~3s SCENES. Each scene:
+// an instant CLEAR removes the previous pile (one SURVIVOR card carries over), ~0.3s later a big
+// ANCHOR card pops in, then 2-3 smaller ACCENTS layer on/around it every 0.3-0.7s (some swapping
+// the previous accent out, some spawning BEHIND the anchor — renderOrder is not strict deal-order).
+// Population stays 2-5 cards. ALL entrances AND exits are INSTANT (measured: single-frame events,
+// no slide/scale/fade tween). On top of that sits ONE GLOBAL SLOW ZOOM: the whole collage scales
+// ~3%/s about frame centre (measured 2.9%/s sqrt-area growth on every clean track, with centres
+// drifting radially outward at exactly the centre-anchored-zoom rate) — cards swell continuously
+// for their whole life; the clears keep anything from growing too big. The pile + zoom hard-reset
+// at the loop seam (the reference does not loop — same accepted pattern as the typewriter text).
+// The reference's drop shadows and white-matte "speaker cards" were tried and dropped by user
+// choice — cards are pure edge-to-edge media, no shadow.
+const STACK_CAP=30;                                          // max cards per loop
+const STACK_ZOOM=0.03;                                       // global collage zoom rate, /s (measured 2.9%/s)
 
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
 
@@ -505,33 +512,76 @@ function buildZoomTiles(rnd){
   }
 }
 
-// ---- Stack mode: seeded deal order + placements. Sizes/positions measured from the reference
-// (long side ≈0.38–0.75 of frame height after the global Scale multiplier; centre-biased spots).
-// dealAt = loop fraction when the card pops in: first card present at the seam, the rest spread
-// over the first ~93% (≈0.7s cadence at reference speeds), final pile holds to the loop end.
+// ---- Stack mode: seeded SCENE schedule (see the Stack header comment for the measured grammar).
+// The loop splits into ~3s scenes (length-jittered). Per scene: anchor (long ≈0.46–0.63·H; ×1.19
+// Scale ≈0.55–0.75 rendered) pops ~0.3s after the clear, accents (≈0.13–0.29·H) cluster around it
+// every 0.3–0.7s. dealAt/dealOut are loop fractions — visibility is a hard window, no tweens.
+// Placements are PRE-DIVIDED by the deal-time global zoom (gz0) so one shared exp(STACK_ZOOM·t)
+// transform in the render loop zooms the whole collage while each card still pops in at its
+// sampled size/spot. Media cycles across scenes (reuse allowed — lifetimes are disjoint; a card
+// never shares the screen with its own duplicate unless uploads < concurrent cards).
 function buildStackTiles(rnd){
-  const n=Math.min(media.length, STACK_CAP);
+  const L=params.loopSec;
   const mi=media.map((_,i)=>i); for(let i=mi.length-1;i>0;i--){const j=(rnd()*(i+1))|0;[mi[i],mi[j]]=[mi[j],mi[i]];}
-  for(let k=0;k<n;k++){
-    const m=media[mi[k]];
-    const long=(0.32+rnd()*0.31)*OUT_H;                       // ×scale(1.19) → ≈0.38–0.75·H rendered
-    const r=PAN_RATIOS[(rnd()*PAN_RATIOS.length)|0];
-    const w=r>=1?long:long*r, h=r>=1?long/r:long;
-    const cx=OUT_W*(0.30+rnd()*0.40), cy=OUT_H*(0.34+rnd()*0.32);
-    const dealAt=k===0?0:Math.min(0.93, 0.03+0.90*(k-0.5*rnd())/n);
-    const base=k+10, tileAR=w/h;                              // renderOrder stacks by deal index
+  let mp=0;
+  const nextMedia=(avoid)=>{                                  // cycle the shuffle; skip on-screen media when possible
+    for(let k=0;k<mi.length;k++){ const idx=mi[mp%mi.length]; mp++; if(!avoid.has(idx)) return idx; }
+    return mi[(mp++)%mi.length];
+  };
+  const nScenes=Math.max(2,Math.min(6,Math.round(L/3)));
+  const lens=[]; let sum=0; for(let s=0;s<nScenes;s++){const v=0.7+rnd()*0.6;lens.push(v);sum+=v;}
+  const bounds=[0]; for(let s=0;s<nScenes;s++) bounds.push(bounds[s]+lens[s]/sum);
+  const sched=[];                                             // {mIdx,big,cx0,cy0,w,h,dealAt,dealOut,order}
+  let survivor=null;                                          // the one card carried across each clear
+  for(let s=0;s<nScenes && sched.length<STACK_CAP;s++){
+    const s0=bounds[s], s1=bounds[s+1], last=s===nScenes-1, base=s*8+10;
+    const cards=[], alive=new Set(); if(survivor) alive.add(survivor.mIdx);
+    const mk=(big,at,order)=>{
+      const mIdx=nextMedia(alive); alive.add(mIdx);
+      const long=(big?0.46+rnd()*0.17:0.13+rnd()*0.16)*OUT_H;
+      const r=PAN_RATIOS[(rnd()*PAN_RATIOS.length)|0];
+      const w=r>=1?long:long*r, h=r>=1?long/r:long;
+      let cx,cy;
+      if(big){ cx=OUT_W*(0.32+rnd()*0.36); cy=OUT_H*(0.36+rnd()*0.28); }
+      else{ const a=cards[0], ang=rnd()*6.28318, rad=(0.16+rnd()*0.22)*OUT_H;   // cluster on/around the anchor
+            cx=Math.min(OUT_W*0.88,Math.max(OUT_W*0.12,a.cx0+Math.cos(ang)*rad));
+            cy=Math.min(OUT_H*0.88,Math.max(OUT_H*0.12,a.cy0+Math.sin(ang)*rad)); }
+      const c={mIdx,big,cx0:cx,cy0:cy,w,h,dealAt:at,dealOut:last?1.01:s1,order};
+      cards.push(c); sched.push(c); return c;
+    };
+    let t=s===0?0:Math.min(s1-0.02, s0+0.3/L);                // anchor: ~0.3s after the clear; scene 0's sits at the seam
+    mk(true, t, base+4);
+    const nAcc=2+((rnd()<0.5)?1:0); let up=0, dn=0, prev=null;
+    for(let k=0;k<nAcc && sched.length<STACK_CAP;k++){
+      t=Math.min(s1-0.015, t+(0.3+rnd()*0.4)/L);
+      const behind=rnd()<0.25;                                // some accents spawn UNDER the anchor (measured)
+      const c=mk(false, t, behind?base+3-(dn++):base+5+(up++));
+      if(prev && rnd()<0.4){ prev.dealOut=c.dealAt; alive.delete(prev.mIdx); }  // instant swap (measured)
+      prev=c;
+    }
+    if(!last){                                                // clear at scene end; one survivor coasts into the next scene
+      const held=cards.filter(c=>c.dealOut>s1-1e-6), acc=held.filter(c=>!c.big);
+      survivor=(acc.length&&rnd()<0.7)?acc[(rnd()*acc.length)|0]:held[(rnd()*held.length)|0];
+      survivor.dealOut=Math.min(1.01, s1+(0.3+rnd()*0.3)*(bounds[s+2]-s1));
+    }
+  }
+  for(const c of sched){
+    const m=media[c.mIdx];
+    const gz0=Math.exp(STACK_ZOOM*c.dealAt*L);                // pre-divide so the card renders at target size at dealAt
+    const tileAR=c.w/c.h;
     let tex; if(m.type==='vid'){ tex=new THREE.VideoTexture(m.el); tex.minFilter=THREE.LinearFilter; }
     else { tex=new THREE.Texture(m.el); tex.minFilter=THREE.LinearFilter; tex.needsUpdate=true; }
     const natW=m.type==='vid'?m.el.videoWidth:m.el.naturalWidth, natH=m.type==='vid'?m.el.videoHeight:m.el.naturalHeight;
     const cropped=applyCover(tex,natW,natH,tileAR);
     const mat=new THREE.MeshBasicMaterial({map:tex,transparent:true,opacity:1,depthTest:false,depthWrite:false});
-    const mesh=new THREE.Mesh(unitPlane,mat); mesh.renderOrder=base; scene.add(mesh);
+    const mesh=new THREE.Mesh(unitPlane,mat); mesh.renderOrder=c.order; mesh.visible=false; scene.add(mesh);
     tiles.push({
-      mesh, type:m.type, el:m.el, tileAR, cropped, z:base,
-      canvas:{cx, cy, w, h}, dealAt,
+      mesh, type:m.type, el:m.el, tileAR, cropped, z:c.order,
+      canvas:{cx:OUT_W/2+(c.cx0-OUT_W/2)/gz0, cy:OUT_H/2+(c.cy0-OUT_H/2)/gz0, w:c.w/gz0, h:c.h/gz0},
+      dealAt:c.dealAt, dealOut:c.dealOut,
       clx:0, cly:0, inertia:0.25,
       amp:0.5+rnd()*0.5, cyc:(rnd()<0.45?1:(rnd()<0.8?2:3)), ph:rnd()*6.28318,
-      dax:8+Math.max(w,h)*0.02, day:8+Math.max(w,h)*0.02,
+      dax:8+Math.max(c.w,c.h)*0.02, day:8+Math.max(c.w,c.h)*0.02,
       dcx:(rnd()<0.65?1:2), dcy:(rnd()<0.65?1:2), dpx:rnd()*6.28318, dpy:rnd()*6.28318
     });
   }
@@ -607,8 +657,8 @@ function buildTimeline(){
   }
   if(params.mode==='zoom'||params.mode==='stack'){
     // linear progress only. Zoom: constant-speed dolly (measured: no easing) — every tile's phase
-    // wraps exactly at L → seamless. Stack: loopProg drives the card deals (lp >= dealAt pops a
-    // card in); the pile hard-resets at the seam like the reference.
+    // wraps exactly at L → seamless. Stack: loopProg drives everything — deal-in/deal-out windows
+    // AND the global collage zoom exp(STACK_ZOOM·lp·L); pile + zoom hard-reset at the seam.
     tl=gsap.timeline({repeat:-1});
     tl.to({_p:0},{_p:1,duration:L,ease:'none'}, 0);
     return;
@@ -632,6 +682,8 @@ function animate(){
   const cx=cam.cx, cy=cam.cy, z=cam.zoom, par=params.parallax, b=params.bulge, dr=params.drift, mo=params.momentum;
   const HW=OUT_W/2, HH=OUT_H/2, TWO_PI=6.28318, lp=loopProg;
   const isPan=params.mode==='pan', isZoom=params.mode==='zoom', isStack=params.mode==='stack';
+  // Stack: one global collage zoom, ~3%/s about frame centre (measured) — shared by every card
+  const stackGz=isStack?Math.exp(STACK_ZOOM*lp*(tl?tl.duration():params.loopSec)):1;
   for(const t of tiles){
     if(t.type==='vid' && !t.cropped && t.el.videoWidth){ t.cropped=applyCover(t.mesh.material.map,t.el.videoWidth,t.el.videoHeight,t.tileAR); }
     // directional momentum: ease the tile's LAGGED camera (clx,cly) toward the real cam. fol<1 makes it
@@ -654,11 +706,15 @@ function animate(){
       sx=HW + t.dirx*t.d0*g + drx; sy=HH + t.diry*t.d0*g + dry;
       sizeMul=g;
     } else if(isStack){
-      // Stack mode: the card pops in the instant loopProg passes its dealAt (measured: single-frame
-      // entrance, no tween) and then sits still — only its video content plays. No cam, no momentum.
-      t.mesh.visible = lp>=t.dealAt;
-      sx=t.canvas.cx+drx; sy=t.canvas.cy+dry;
-      sizeMul=1;
+      // Stack mode: hard visibility window — the card pops in at dealAt and out at dealOut, both
+      // instant (measured: single-frame events, no tween). While visible it rides the ONE global
+      // collage zoom: size AND radial offset from frame-centre scale together by stackGz, so the
+      // whole pile swells slowly outward (a card at dead-centre only grows). canvas coords were
+      // pre-divided by the deal-time zoom, so each card pops in at its sampled size/spot. The zoom
+      // hard-resets with the pile at the seam. No cam, no momentum.
+      t.mesh.visible = lp>=t.dealAt && lp<t.dealOut;
+      sx=HW+(t.canvas.cx-HW)*stackGz+drx; sy=HH+(t.canvas.cy-HH)*stackGz+dry;
+      sizeMul=stackGz;
     } else if(isPan){
       // Pan mode: continuous left→right sweep, 3 depth layers at distinct constant speeds (gain).
       // Momentum still lags the pan scalar; position wraps within each layer's own period so the

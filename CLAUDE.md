@@ -5,8 +5,8 @@ A single-file, all-white minimal web tool that turns a set of uploaded images/mp
 looping 16:9 "moodboard motion" clip. Three motion modes (see "Animation modes"), each traced
 frame-by-frame from a reference clip: **Holds** (default — one big canvas, a single camera pans
 between three held framings), **Pan** (one continuous left→right parallax sweep, wrapping layers),
-**Zoom** (perspective dolly-in with randomly spawning tiles), and **Stack** (a photo pile — full-bleed
-cards deal in one at a time, instant entrances). Depth parallax + a center-scale
+**Zoom** (perspective dolly-in with randomly spawning tiles), and **Stack** (a scene-based collage —
+cards pop in AND out instantly in ~3s scenes while one slow global zoom swells the whole pile). Depth parallax + a center-scale
 bulge add dimensionality; optional top-right typewriter text overlay; white/black background toggle.
 Exports an mp4 (or webm fallback) and previews live on canvas. The sections below describe the
 Holds source-tracing in detail; the other modes' measurements live in "Animation modes".
@@ -226,20 +226,36 @@ Each mode has its own layout builder + timeline + projection branch; the per-til
   backward at respawn). `renderOrder = K*100` (nearer on top). Zoom defaults: black bg,
   bulge/drift/pulse 0.
 
-### Stack (photo-pile card deal) — traced from the NYPL Sana AI Summit promo clip
-- Large axis-aligned **full-bleed** cards (long side ≈0.38–0.75·H rendered, centre-biased spots)
-  land one at a time on a pile; each new card renders on top (`renderOrder = dealIndex+10`); old
-  cards never move or fade. **Entrances are INSTANT** (measured: single-frame events — no slide/
-  scale/fade tween): the render loop toggles `mesh.visible` when `loopProg ≥ dealAt`. First card
-  present at the seam; the rest spread over the first ~93% of the loop (`buildStackTiles`); the
-  pile **hard-resets at the seam by design** (the reference does not loop seamlessly — same
+### Stack (scene-based collage) — re-traced frame-by-frame from the NYPL Sana AI Summit promo clip
+- **NOT a monotonic pile** (an accumulate-only version was built first and replaced after
+  re-measurement): the reference plays as ~3s **scenes**. Per scene: an instant **clear** removes
+  the pile but **one survivor carries over**; ~0.3s later a big **anchor** pops in (long
+  ≈0.46–0.63·H sampled, ×1.19 Scale ≈0.55–0.75 rendered); then 2–3 small **accents**
+  (≈0.13–0.29·H) cluster on/around it every 0.3–0.7s — some **swap** the previous accent out
+  (its `dealOut` = the newcomer's `dealAt`), ~25% spawn **behind** the anchor (per-scene
+  renderOrder band `s*8+10`; anchor at +4, behind-accents below, on-top above). Population stays
+  2–5 cards (dips to 1 at the post-clear beat — measured in the reference too).
+- **Entrances AND exits are INSTANT** (measured: single-frame events — no slide/scale/fade
+  tween): the render loop sets `mesh.visible = dealAt ≤ lp < dealOut`. First anchor present at
+  the seam; the pile **hard-resets at the seam by design** (the reference does not loop — same
   accepted pattern as the typewriter text).
+- **Global slow zoom** — the "cards slowly scaling up continuously": ONE shared
+  `gz = exp(STACK_ZOOM·lp·L)` (`STACK_ZOOM=0.03`/s, measured 2.9%/s sqrt-area growth on every
+  clean track) scales every card's size AND radial offset about frame-centre, so the whole
+  collage swells outward; a dead-centre card only grows. Placements are **pre-divided by the
+  deal-time zoom** in `buildStackTiles` (`canvas = target/gz0`, `gz0=exp(STACK_ZOOM·dealAt·L)`)
+  so each card pops in at its sampled size/spot. Zoom resets with the pile at the seam.
+  Measured evidence for "global, centre-anchored": all clean tracks grow at the same rate
+  regardless of position, and centres drift radially outward at exactly the predicted rate.
+- **Media reuse across scenes**: media cycles in shuffled order (~4 cards × ~5 scenes ≈ 18–20
+  slots); the same upload may return in a later scene but is skipped while it's on screen
+  (survivor included), so duplicates never share the frame unless uploads < concurrent cards.
 - The reference's drop shadows and white-matte "speaker cards" were built and then **dropped by
   user choice** — cards are pure edge-to-edge media, no shadow, no matte. Don't reintroduce them
   unprompted.
-- Stack defaults: bulge/drift/pulse/disperse 0, white bg — cards are static once dealt; only
-  their video content plays. No cam, no momentum in this branch. `MODE_DEFAULTS` now carries a
-  per-mode `disperse` too.
+- Stack defaults: bulge/drift/pulse/disperse 0, white bg — the global zoom + card deals are the
+  only motion besides playing video content. No cam, no momentum in this branch. `MODE_DEFAULTS`
+  now carries a per-mode `disperse` too.
 
 ## Background + text overlay
 - `params.bg` ('#fff'/'#000') → `renderer.setClearColor`; mode switch applies the mode's default
